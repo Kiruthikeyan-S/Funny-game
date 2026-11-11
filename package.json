@@ -1,0 +1,10 @@
+{
+  "name": "the-cursed-kingdom",
+  "version": "1.0.0",
+  "description": "The Cursed Kingdom - 13-Level 2D Pixel-Art Action Adventure Game",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js"
+  }
+}
