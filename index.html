@@ -1,0 +1,323 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>The Cursed Kingdom — 2D Pixel-Art Action Adventure</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&family=VT323&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+  <div id="app-container">
+    <!-- Background Canvas for Menu & Gameplay -->
+    <canvas id="game-canvas" width="960" height="540"></canvas>
+
+    <!-- ================= SCREEN 1: MAIN MENU ================= -->
+    <div id="screen-main-menu" class="ui-screen active">
+      <div class="menu-frame">
+        <div class="stone-emblem" title="The Ancient Magical Stone">
+          <div class="stone-core"></div>
+        </div>
+        <p class="subtitle-badge">2D PIXEL-ART ACTION ADVENTURE</p>
+        <h1 class="game-title">THE CURSED<br/><span>KINGDOM</span></h1>
+        <p class="story-tagline">Recover the Ancient Stone. Survive 13 Levels. Break the Witch's Curse.</p>
+
+        <div class="menu-buttons">
+          <button id="btn-new-game" class="pixel-btn primary">NEW GAME</button>
+          <button id="btn-continue" class="pixel-btn accent">CONTINUE <span id="continue-level-tag">(LV 1)</span></button>
+          <button id="btn-level-select" class="pixel-btn">LEVEL SELECTION (13)</button>
+          <button id="btn-armory" class="pixel-btn">ROYAL ARMORY &amp; UPGRADES</button>
+          <button id="btn-story-intro" class="pixel-btn">STORY CHRONICLES</button>
+          <button id="btn-settings" class="pixel-btn">SETTINGS</button>
+        </div>
+
+        <div class="menu-footer">
+          <span>PC: WASD / Arrows + J (Attack) + K (Jump) + L (Block) + U (Stone Power)</span>
+          <span>Mobile / Touch: On-Screen Gamepad Enabled</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= STORY INTRO / CUTSCENE SCREEN ================= -->
+    <div id="screen-story" class="ui-screen">
+      <div class="panel-box story-panel">
+        <div class="panel-header">
+          <h2 id="story-title">THE FALL OF THE KINGDOM</h2>
+          <button id="btn-skip-story" class="pixel-btn small">SKIP &raquo;</button>
+        </div>
+        <div class="story-stage">
+          <canvas id="story-canvas" width="680" height="240"></canvas>
+          <div class="story-speaker-badge" id="story-speaker">THE ROYAL CHRONICLER</div>
+          <p id="story-text" class="story-text"></p>
+        </div>
+        <div class="story-controls">
+          <div id="story-dots" class="story-dots"></div>
+          <div class="story-btn-group">
+            <button id="btn-story-prev" class="pixel-btn small">&laquo; PREV</button>
+            <button id="btn-story-next" class="pixel-btn primary small">NEXT &raquo;</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= SCREEN 2: LEVEL SELECTION (5 WORLDS, 13 LEVELS) ================= -->
+    <div id="screen-level-select" class="ui-screen">
+      <div class="panel-box wide-panel">
+        <div class="panel-header">
+          <div>
+            <h2>REALM MAP &mdash; 13 LEVELS</h2>
+            <p class="panel-subtitle">5 Worlds &bull; Defeat the Witch at Level 6 &amp; Level 13</p>
+          </div>
+          <div class="header-stats">
+            <span class="stat-pill gold-pill">&#9679; <strong id="map-total-coins">0</strong> COINS</span>
+            <span class="stat-pill star-pill">&#9733; <strong id="map-total-stars">0</strong> / 39</span>
+            <button id="btn-unlock-all" class="pixel-btn small warning" title="Unlock all 13 levels for testing">UNLOCK ALL 13</button>
+            <button id="btn-map-back" class="pixel-btn small">&laquo; MENU</button>
+          </div>
+        </div>
+
+        <div id="worlds-container" class="worlds-container">
+          <!-- Populated dynamically from 5 worlds / 13 levels data -->
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= ROYAL ARMORY / UPGRADES MODAL ================= -->
+    <div id="screen-armory" class="ui-screen">
+      <div class="panel-box">
+        <div class="panel-header">
+          <h2>ROYAL ARMORY &amp; RELICS</h2>
+          <div class="header-stats">
+            <span class="stat-pill gold-pill">&#9679; <strong id="armory-coins">0</strong> COINS</span>
+            <button id="btn-armory-back" class="pixel-btn small">&laquo; BACK</button>
+          </div>
+        </div>
+        <div id="upgrades-list" class="upgrades-grid"></div>
+      </div>
+    </div>
+
+    <!-- ================= SCREEN 3: GAMEPLAY HUD ================= -->
+    <div id="screen-hud" class="ui-screen hud-overlay">
+      <!-- Top Bar -->
+      <div class="hud-top">
+        <!-- Top-Left: Health, Shield, & Ancient Stone Power -->
+        <div class="hud-player-status">
+          <div class="portrait-box">
+            <div class="warrior-icon"></div>
+            <span id="hud-weapon-tier" class="tier-badge">LV1</span>
+          </div>
+          <div class="bars-column">
+            <div class="bar-row">
+              <span class="bar-label">HP</span>
+              <div class="bar-track hp-track">
+                <div id="hud-hp-fill" class="bar-fill hp-fill" style="width: 100%;"></div>
+              </div>
+              <span id="hud-hp-text" class="bar-value">100/100</span>
+            </div>
+            <div class="bar-row">
+              <span class="bar-label stone-label">STONE</span>
+              <div class="bar-track stone-track">
+                <div id="hud-stone-fill" class="bar-fill stone-fill" style="width: 100%;"></div>
+              </div>
+              <span id="hud-stone-text" class="bar-value">READY</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Top-Center: Boss Health Bar (When active in Level 5, 6, 9, 12, 13) -->
+        <div id="hud-boss-box" class="hud-boss-box hidden">
+          <div class="boss-title-row">
+            <span id="hud-boss-name">THE WITCH MORGANA</span>
+            <span id="hud-boss-shield-tag" class="curse-tag hidden">CURSE BARRIER ACTIVE (USE STONE!)</span>
+          </div>
+          <div class="bar-track boss-track">
+            <div id="hud-boss-fill" class="bar-fill boss-fill" style="width: 100%;"></div>
+          </div>
+        </div>
+
+        <!-- Top-Right: Coins, Level Info & Pause -->
+        <div class="hud-right-info">
+          <div class="hud-stat-group">
+            <div class="hud-level-badge">
+              <span id="hud-world-label">WORLD 1</span>
+              <strong id="hud-level-title">LV 1: THE BEGINNING</strong>
+            </div>
+            <div class="hud-progress-wrap">
+              <div class="bar-track progress-track">
+                <div id="hud-progress-fill" class="bar-fill progress-fill" style="width: 0%;"></div>
+              </div>
+            </div>
+          </div>
+          <div class="hud-coins-box">
+            <span class="coin-dot"></span>
+            <strong id="hud-coins">0</strong>
+          </div>
+          <button id="btn-pause" class="pixel-btn icon-btn" title="Pause Game (ESC / P)">| |</button>
+        </div>
+      </div>
+
+      <!-- Story / Boss Dialogue Banner inside Gameplay -->
+      <div id="hud-dialogue-banner" class="dialogue-banner hidden">
+        <div class="dialogue-portrait" id="dialogue-portrait"></div>
+        <div class="dialogue-content">
+          <strong id="dialogue-speaker">THE KING</strong>
+          <p id="dialogue-line">Brave Warrior, recover the Ancient Stone and lift the curse!</p>
+        </div>
+        <button id="btn-dialogue-dismiss" class="pixel-btn small">OK</button>
+      </div>
+
+      <!-- Checkpoint Toast -->
+      <div id="hud-toast" class="hud-toast hidden">CHECKPOINT REACHED!</div>
+
+      <!-- Bottom Touch Controls (Left: Movement, Right: Attack, Jump, Block, Stone Power) -->
+      <div id="touch-controls" class="touch-controls">
+        <div class="dpad-group">
+          <button id="touch-left" class="touch-btn dpad-btn" aria-label="Move Left">&larr;</button>
+          <button id="touch-right" class="touch-btn dpad-btn" aria-label="Move Right">&rarr;</button>
+        </div>
+        <div class="action-group">
+          <button id="touch-stone" class="touch-btn special-btn" aria-label="Ancient Stone Power">
+            <span>STONE</span>
+            <small>U</small>
+          </button>
+          <button id="touch-block" class="touch-btn block-btn" aria-label="Shield Block / Dash">
+            <span>SHIELD</span>
+            <small>L</small>
+          </button>
+          <button id="touch-attack" class="touch-btn attack-btn" aria-label="Sword Attack">
+            <span>SWORD</span>
+            <small>J</small>
+          </button>
+          <button id="touch-jump" class="touch-btn jump-btn" aria-label="Jump">
+            <span>JUMP</span>
+            <small>K</small>
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= SCREEN 4: PAUSE MENU ================= -->
+    <div id="screen-pause" class="ui-screen modal-overlay">
+      <div class="panel-box narrow-panel">
+        <h2>GAME PAUSED</h2>
+        <p id="pause-level-name" class="panel-subtitle">Level 1: The Beginning</p>
+        <div class="menu-buttons">
+          <button id="btn-resume" class="pixel-btn primary">RESUME GAME</button>
+          <button id="btn-restart" class="pixel-btn">RESTART LEVEL</button>
+          <button id="btn-pause-settings" class="pixel-btn">SETTINGS</button>
+          <button id="btn-pause-map" class="pixel-btn">LEVEL SELECTION</button>
+          <button id="btn-pause-menu" class="pixel-btn danger">MAIN MENU</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= SCREEN 5: LEVEL COMPLETION / GAME OVER ================= -->
+    <div id="screen-level-complete" class="ui-screen modal-overlay">
+      <div class="panel-box narrow-panel">
+        <p id="complete-badge" class="subtitle-badge">STAGE CLEARED</p>
+        <h2 id="complete-title">VICTORY!</h2>
+        <p id="complete-story-note" class="story-note"></p>
+
+        <div id="complete-stars" class="stars-display">
+          <span class="star earned">&#9733;</span>
+          <span class="star earned">&#9733;</span>
+          <span class="star earned">&#9733;</span>
+        </div>
+
+        <div class="stats-summary">
+          <div class="summary-row">
+            <span>COINS COLLECTED</span>
+            <strong id="complete-coins" class="gold-text">+45</strong>
+          </div>
+          <div class="summary-row">
+            <span>ENEMIES DEFEATED</span>
+            <strong id="complete-enemies">8</strong>
+          </div>
+          <div class="summary-row">
+            <span>WARRIOR HEALTH</span>
+            <strong id="complete-hp">85%</strong>
+          </div>
+        </div>
+
+        <div class="menu-buttons">
+          <button id="btn-next-level" class="pixel-btn primary">NEXT LEVEL &raquo;</button>
+          <button id="btn-replay-level" class="pixel-btn">REPLAY LEVEL</button>
+          <button id="btn-complete-armory" class="pixel-btn accent">UPGRADE WARRIOR</button>
+          <button id="btn-complete-map" class="pixel-btn">LEVEL SELECTION</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= SCREEN 6: FINAL ENDING & CREDITS ================= -->
+    <div id="screen-ending" class="ui-screen">
+      <div class="panel-box story-panel ending-panel">
+        <div class="stone-emblem Golden-glow">
+          <div class="stone-core"></div>
+        </div>
+        <p class="subtitle-badge">THE CURSE IS BROKEN &bull; LEVEL 13 COMPLETED</p>
+        <h2 class="ending-title">THE KINGDOM IS RESTORED!</h2>
+        <canvas id="ending-canvas" width="680" height="200"></canvas>
+        <div class="ending-story-scroll">
+          <p>With the blazing light of the <strong>Ancient Magical Stone</strong>, the Brave Warrior shattered the Witch's dark barrier and banished her shadow forever.</p>
+          <p>Across the Forgotten Forest, the Dark Caves, the Frozen Mountains, and the Royal Castle, the black thorns dissolved into golden sunlight. The King welcomed the victorious champion back to the throne room as the realm celebrated peace once more.</p>
+        </div>
+        <div class="ending-stats-bar">
+          <span>TOTAL STARS: <strong id="ending-stars">39/39</strong></span>
+          <span>TOTAL COINS: <strong id="ending-coins">0</strong></span>
+          <span>STATUS: <strong>LEGENDARY SAVIOR</strong></span>
+        </div>
+        <div class="story-btn-group">
+          <button id="btn-ending-map" class="pixel-btn">REPLAY ANY LEVEL</button>
+          <button id="btn-ending-menu" class="pixel-btn primary">RETURN TO MAIN MENU</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= SETTINGS MODAL ================= -->
+    <div id="screen-settings" class="ui-screen modal-overlay">
+      <div class="panel-box narrow-panel">
+        <div class="panel-header">
+          <h2>SETTINGS</h2>
+          <button id="btn-settings-close" class="pixel-btn small">CLOSE</button>
+        </div>
+        <div class="settings-list">
+          <label class="setting-row">
+            <span>SOUND EFFECTS (RETRO SYNTH)</span>
+            <input type="checkbox" id="toggle-sfx" checked />
+          </label>
+          <label class="setting-row">
+            <span>ON-SCREEN TOUCH GAMEPAD</span>
+            <input type="checkbox" id="toggle-touch" checked />
+          </label>
+          <label class="setting-row">
+            <span>CRT SCANLINE PIXEL FILTER</span>
+            <input type="checkbox" id="toggle-crt" checked />
+          </label>
+          <div class="setting-row">
+            <span>RESET SAVE PROGRESS</span>
+            <button id="btn-reset-save" class="pixel-btn small danger">RESET DATA</button>
+          </div>
+        </div>
+        <div class="controls-guide">
+          <h3>CONTROLS GUIDE</h3>
+          <p><strong>Move:</strong> A / D or Left / Right Arrows</p>
+          <p><strong>Jump / Double Jump:</strong> W / K / Up Arrow</p>
+          <p><strong>Sword Combo:</strong> J / Z / Spacebar</p>
+          <p><strong>Shield Block / Dash:</strong> L / X / Shift</p>
+          <p><strong>Ancient Stone Power:</strong> U / E (Destroys Witch Barrier &amp; damages all nearby foes)</p>
+        </div>
+      </div>
+    </div>
+
+    <div id="crt-overlay" class="crt-overlay"></div>
+  </div>
+
+  <script src="js/data.js"></script>
+  <script src="js/audio.js"></script>
+  <script src="js/sprites.js"></script>
+  <script src="js/engine.js"></script>
+  <script src="js/ui.js"></script>
+</body>
+</html>

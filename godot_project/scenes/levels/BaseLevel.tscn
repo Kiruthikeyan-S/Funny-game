@@ -1,0 +1,14 @@
+[gd_scene load_steps=3 format=3 uid="uid://cursed_kingdom_base_level"]
+
+[ext_resource type="Script" path="res://scripts/player/Warrior.gd" id="1_warrior"]
+[ext_resource type="Script" path="res://scripts/enemies/WitchBoss.gd" id="2_witch"]
+
+[node name="BaseLevel" type="Node2D"]
+
+[node name="Warrior" type="CharacterBody2D" parent="."]
+position = Vector2(120, 360)
+script = ExtResource("1_warrior")
+
+[node name="WitchBoss" type="CharacterBody2D" parent="."]
+position = Vector2(780, 360)
+script = ExtResource("2_witch")
