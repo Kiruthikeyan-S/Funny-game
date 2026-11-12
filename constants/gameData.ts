@@ -1,5 +1,5 @@
 // ============================================================================
-// THE CURSED KINGDOM — COMPLETE 13-LEVEL & 13-MONSTER PLAN (MATCHING UI DESIGN)
+// THE CURSED KINGDOM — COMPLETE 13-LEVEL & 13-MONSTER PLAN + AI & WAVE CONFIG
 // ============================================================================
 
 export type MonsterId =
@@ -17,6 +17,31 @@ export type MonsterId =
   | 'cursed_knight'
   | 'witch_final';
 
+export type EnemyAIState =
+  | 'IDLE'
+  | 'PATROL'
+  | 'DETECT'
+  | 'CHASE'
+  | 'PREPARE_ATTACK'
+  | 'ATTACK'
+  | 'RECOVER'
+  | 'HURT'
+  | 'DEAD';
+
+export type MonsterAttackPattern =
+  | 'slime_hop'       // Leaps in an arc and splashes acid on landing
+  | 'wolf_pounce'     // Fast horizontal lunge bite
+  | 'golem_slam'      // Slow heavy ground smash with shockwave
+  | 'bat_swoop'       // Aerial dive-bomb swoop
+  | 'skeleton_combo'  // Raises shield then performs bone sword thrust
+  | 'witch_orb'       // Teleports & fires dark curse projectiles + shadow wave
+  | 'ice_dash'        // Chilling frost dash that drains stamina
+  | 'frost_stomp'     // AoE freeze wave + ground stomp
+  | 'fire_breath'     // Blazing magma leap + flame cone
+  | 'mage_volley'     // Ranged void bolt volley
+  | 'knight_cleave'   // Heavy armored dread charge + hellfire cleave
+  | 'witch_apocalypse'; // Multi-phase winged void storm + curse barrier
+
 export interface MonsterAbility {
   name: string;
   icon: string;
@@ -29,11 +54,24 @@ export interface MonsterConfig {
   level: number;
   world: number;
   hearts: number;
+  // Lore / Gallery display stats (matching UI design sheets)
   health: number;
   attack: number;
   defense: number;
   speedLabel: 'Slow' | 'Medium' | 'Fast' | 'Very Fast';
+  // Balanced in-game combat stats
+  combatHp: number;
+  minionHp: number;
+  combatAttack: number;
+  combatDefense: number;
   moveSpeed: number;
+  detectRange: number;
+  attackRange: number;
+  windupFrames: number;
+  attackFrames: number;
+  recoverFrames: number;
+  cooldownFrames: number;
+  attackPattern: MonsterAttackPattern;
   scale: number;
   isBoss: boolean;
   needsStone?: boolean;
@@ -56,6 +94,16 @@ export interface WorldInfo {
   cardBorder: string;
 }
 
+export interface WaveDefinition {
+  waveIndex: number;
+  gateX: number;
+  spawns: {
+    monsterId: MonsterId;
+    offsetX: number;
+    isBoss?: boolean;
+  }[];
+}
+
 export interface LevelInfo {
   level: number;
   world: number;
@@ -65,6 +113,8 @@ export interface LevelInfo {
   monsterId: MonsterId;
   minionId: MonsterId;
   minionCount: number;
+  checkpointX: number;
+  waves: WaveDefinition[];
   gemsInLevel: number;
   introSpeaker: string;
   introDialogue: string;
@@ -150,7 +200,18 @@ export const MONSTERS_DATA: Record<MonsterId, MonsterConfig> = {
     attack: 65,
     defense: 30,
     speedLabel: 'Slow',
-    moveSpeed: 1.3,
+    combatHp: 190,
+    minionHp: 115,
+    combatAttack: 16,
+    combatDefense: 4,
+    moveSpeed: 1.35,
+    detectRange: 230,
+    attackRange: 56,
+    windupFrames: 26,
+    attackFrames: 14,
+    recoverFrames: 24,
+    cooldownFrames: 52,
+    attackPattern: 'slime_hop',
     scale: 1.0,
     isBoss: false,
     themeColor: '#52b788',
@@ -170,7 +231,18 @@ export const MONSTERS_DATA: Record<MonsterId, MonsterConfig> = {
     attack: 110,
     defense: 55,
     speedLabel: 'Fast',
-    moveSpeed: 2.3,
+    combatHp: 240,
+    minionHp: 140,
+    combatAttack: 21,
+    combatDefense: 6,
+    moveSpeed: 2.35,
+    detectRange: 270,
+    attackRange: 72,
+    windupFrames: 20,
+    attackFrames: 12,
+    recoverFrames: 20,
+    cooldownFrames: 45,
+    attackPattern: 'wolf_pounce',
     scale: 1.05,
     isBoss: false,
     themeColor: '#adb5bd',
@@ -190,7 +262,18 @@ export const MONSTERS_DATA: Record<MonsterId, MonsterConfig> = {
     attack: 150,
     defense: 110,
     speedLabel: 'Slow',
-    moveSpeed: 1.4,
+    combatHp: 380,
+    minionHp: 180,
+    combatAttack: 28,
+    combatDefense: 11,
+    moveSpeed: 1.35,
+    detectRange: 260,
+    attackRange: 78,
+    windupFrames: 34,
+    attackFrames: 16,
+    recoverFrames: 30,
+    cooldownFrames: 60,
+    attackPattern: 'golem_slam',
     scale: 1.35,
     isBoss: true,
     themeColor: '#7f4f24',
@@ -210,7 +293,18 @@ export const MONSTERS_DATA: Record<MonsterId, MonsterConfig> = {
     attack: 140,
     defense: 60,
     speedLabel: 'Very Fast',
-    moveSpeed: 2.6,
+    combatHp: 250,
+    minionHp: 145,
+    combatAttack: 22,
+    combatDefense: 6,
+    moveSpeed: 2.65,
+    detectRange: 280,
+    attackRange: 68,
+    windupFrames: 18,
+    attackFrames: 14,
+    recoverFrames: 18,
+    cooldownFrames: 42,
+    attackPattern: 'bat_swoop',
     scale: 1.0,
     isBoss: false,
     themeColor: '#9d4edd',
@@ -230,7 +324,18 @@ export const MONSTERS_DATA: Record<MonsterId, MonsterConfig> = {
     attack: 195,
     defense: 130,
     speedLabel: 'Medium',
+    combatHp: 430,
+    minionHp: 195,
+    combatAttack: 30,
+    combatDefense: 12,
     moveSpeed: 1.9,
+    detectRange: 260,
+    attackRange: 66,
+    windupFrames: 24,
+    attackFrames: 14,
+    recoverFrames: 22,
+    cooldownFrames: 48,
+    attackPattern: 'skeleton_combo',
     scale: 1.25,
     isBoss: true,
     themeColor: '#4895ef',
@@ -250,7 +355,18 @@ export const MONSTERS_DATA: Record<MonsterId, MonsterConfig> = {
     attack: 260,
     defense: 160,
     speedLabel: 'Fast',
-    moveSpeed: 2.4,
+    combatHp: 560,
+    minionHp: 220,
+    combatAttack: 34,
+    combatDefense: 14,
+    moveSpeed: 2.35,
+    detectRange: 340,
+    attackRange: 170,
+    windupFrames: 26,
+    attackFrames: 16,
+    recoverFrames: 24,
+    cooldownFrames: 50,
+    attackPattern: 'witch_orb',
     scale: 1.35,
     isBoss: true,
     escapeThreshold: 0.35,
@@ -271,7 +387,18 @@ export const MONSTERS_DATA: Record<MonsterId, MonsterConfig> = {
     attack: 230,
     defense: 120,
     speedLabel: 'Fast',
+    combatHp: 310,
+    minionHp: 190,
+    combatAttack: 28,
+    combatDefense: 10,
     moveSpeed: 2.5,
+    detectRange: 280,
+    attackRange: 76,
+    windupFrames: 19,
+    attackFrames: 13,
+    recoverFrames: 20,
+    cooldownFrames: 44,
+    attackPattern: 'ice_dash',
     scale: 1.1,
     isBoss: false,
     themeColor: '#48cae4',
@@ -291,7 +418,18 @@ export const MONSTERS_DATA: Record<MonsterId, MonsterConfig> = {
     attack: 280,
     defense: 165,
     speedLabel: 'Slow',
+    combatHp: 390,
+    minionHp: 230,
+    combatAttack: 33,
+    combatDefense: 15,
     moveSpeed: 1.5,
+    detectRange: 260,
+    attackRange: 80,
+    windupFrames: 32,
+    attackFrames: 16,
+    recoverFrames: 28,
+    cooldownFrames: 56,
+    attackPattern: 'golem_slam',
     scale: 1.3,
     isBoss: false,
     themeColor: '#00b4d8',
@@ -311,7 +449,18 @@ export const MONSTERS_DATA: Record<MonsterId, MonsterConfig> = {
     attack: 320,
     defense: 180,
     speedLabel: 'Medium',
-    moveSpeed: 1.8,
+    combatHp: 580,
+    minionHp: 240,
+    combatAttack: 38,
+    combatDefense: 16,
+    moveSpeed: 1.85,
+    detectRange: 300,
+    attackRange: 92,
+    windupFrames: 30,
+    attackFrames: 18,
+    recoverFrames: 26,
+    cooldownFrames: 54,
+    attackPattern: 'frost_stomp',
     scale: 1.45,
     isBoss: true,
     themeColor: '#90e0ef',
@@ -331,7 +480,18 @@ export const MONSTERS_DATA: Record<MonsterId, MonsterConfig> = {
     attack: 340,
     defense: 150,
     speedLabel: 'Fast',
+    combatHp: 370,
+    minionHp: 225,
+    combatAttack: 34,
+    combatDefense: 12,
     moveSpeed: 2.6,
+    detectRange: 290,
+    attackRange: 82,
+    windupFrames: 18,
+    attackFrames: 14,
+    recoverFrames: 20,
+    cooldownFrames: 42,
+    attackPattern: 'fire_breath',
     scale: 1.15,
     isBoss: false,
     themeColor: '#f77f00',
@@ -351,7 +511,18 @@ export const MONSTERS_DATA: Record<MonsterId, MonsterConfig> = {
     attack: 390,
     defense: 170,
     speedLabel: 'Medium',
+    combatHp: 410,
+    minionHp: 240,
+    combatAttack: 36,
+    combatDefense: 13,
     moveSpeed: 2.0,
+    detectRange: 330,
+    attackRange: 165,
+    windupFrames: 24,
+    attackFrames: 14,
+    recoverFrames: 22,
+    cooldownFrames: 48,
+    attackPattern: 'mage_volley',
     scale: 1.2,
     isBoss: false,
     themeColor: '#9d4edd',
@@ -371,7 +542,18 @@ export const MONSTERS_DATA: Record<MonsterId, MonsterConfig> = {
     attack: 440,
     defense: 240,
     speedLabel: 'Medium',
+    combatHp: 650,
+    minionHp: 270,
+    combatAttack: 42,
+    combatDefense: 18,
     moveSpeed: 2.1,
+    detectRange: 300,
+    attackRange: 84,
+    windupFrames: 26,
+    attackFrames: 16,
+    recoverFrames: 24,
+    cooldownFrames: 50,
+    attackPattern: 'knight_cleave',
     scale: 1.4,
     isBoss: true,
     themeColor: '#fcbf49',
@@ -391,7 +573,18 @@ export const MONSTERS_DATA: Record<MonsterId, MonsterConfig> = {
     attack: 520,
     defense: 280,
     speedLabel: 'Fast',
+    combatHp: 820,
+    minionHp: 280,
+    combatAttack: 46,
+    combatDefense: 20,
     moveSpeed: 2.6,
+    detectRange: 370,
+    attackRange: 180,
+    windupFrames: 24,
+    attackFrames: 18,
+    recoverFrames: 22,
+    cooldownFrames: 46,
+    attackPattern: 'witch_apocalypse',
     scale: 1.5,
     isBoss: true,
     needsStone: true,
@@ -406,6 +599,43 @@ export const MONSTERS_DATA: Record<MonsterId, MonsterConfig> = {
 
 export const MONSTER_GALLERY_LIST: MonsterConfig[] = Object.values(MONSTERS_DATA);
 
+function buildWavesForLevel(
+  length: number,
+  minionId: MonsterId,
+  mainId: MonsterId
+): WaveDefinition[] {
+  const w1Gate = Math.round(length * 0.34);
+  const w2Gate = Math.round(length * 0.66);
+  const w3Gate = length - 120;
+
+  return [
+    {
+      waveIndex: 1,
+      gateX: w1Gate,
+      spawns: [
+        { monsterId: minionId, offsetX: w1Gate - 190 },
+        { monsterId: minionId, offsetX: w1Gate - 70 },
+      ],
+    },
+    {
+      waveIndex: 2,
+      gateX: w2Gate,
+      spawns: [
+        { monsterId: minionId, offsetX: w2Gate - 210 },
+        { monsterId: mainId, offsetX: w2Gate - 95 },
+      ],
+    },
+    {
+      waveIndex: 3,
+      gateX: w3Gate,
+      spawns: [
+        { monsterId: minionId, offsetX: w3Gate - 260 },
+        { monsterId: mainId, offsetX: w3Gate - 130, isBoss: true },
+      ],
+    },
+  ];
+}
+
 export const LEVELS_DATA: LevelInfo[] = [
   {
     level: 1,
@@ -416,10 +646,12 @@ export const LEVELS_DATA: LevelInfo[] = [
     monsterId: 'forest_slime',
     minionId: 'forest_slime',
     minionCount: 5,
+    checkpointX: 950,
+    waves: buildWavesForLevel(1900, 'forest_slime', 'forest_slime'),
     gemsInLevel: 3,
     introSpeaker: 'THE KING',
-    introDialogue: 'Brave warrior! Cross the Forgotten Forest, find the Ancient Stone, and lift the curse!',
-    clearNote: 'You defeated the Forest Slimes and advanced deeper into the Forgotten Forest!',
+    introDialogue: 'Brave warrior! Clear all 3 monster waves in the Forgotten Forest and recover the Ancient Stone!',
+    clearNote: 'You defeated every Forest Slime wave and advanced deeper into the Forgotten Forest!',
   },
   {
     level: 2,
@@ -430,9 +662,11 @@ export const LEVELS_DATA: LevelInfo[] = [
     monsterId: 'wild_wolf',
     minionId: 'forest_slime',
     minionCount: 6,
+    checkpointX: 1050,
+    waves: buildWavesForLevel(2100, 'forest_slime', 'wild_wolf'),
     gemsInLevel: 3,
     introSpeaker: 'THE WARRIOR',
-    introDialogue: 'Wild Wolves prowl these woods. Stay alert and strike with precision!',
+    introDialogue: 'Wild Wolves prowl these woods. Watch their telegraphed pounce and block or dodge!',
     clearNote: 'The Wild Wolf pack has been driven back! The Hidden Ruins lie ahead.',
   },
   {
@@ -444,6 +678,8 @@ export const LEVELS_DATA: LevelInfo[] = [
     monsterId: 'wood_golem',
     minionId: 'wild_wolf',
     minionCount: 5,
+    checkpointX: 1150,
+    waves: buildWavesForLevel(2300, 'wild_wolf', 'wood_golem'),
     gemsInLevel: 3,
     introSpeaker: 'WOOD GOLEM',
     introDialogue: 'None shall claim the Ancient Stone from the Hidden Ruins!',
@@ -458,6 +694,8 @@ export const LEVELS_DATA: LevelInfo[] = [
     monsterId: 'cave_bat',
     minionId: 'cave_bat',
     minionCount: 7,
+    checkpointX: 1150,
+    waves: buildWavesForLevel(2300, 'cave_bat', 'cave_bat'),
     gemsInLevel: 3,
     introSpeaker: 'THE WARRIOR',
     introDialogue: 'Swarms of Cave Bats echo through the glowing crystal caverns!',
@@ -472,6 +710,8 @@ export const LEVELS_DATA: LevelInfo[] = [
     monsterId: 'skeleton_warrior',
     minionId: 'cave_bat',
     minionCount: 6,
+    checkpointX: 1250,
+    waves: buildWavesForLevel(2500, 'cave_bat', 'skeleton_warrior'),
     gemsInLevel: 3,
     introSpeaker: 'SKELETON WARRIOR',
     introDialogue: 'By the Witch’s command, my sword and shield will guard this fortress forever!',
@@ -486,10 +726,12 @@ export const LEVELS_DATA: LevelInfo[] = [
     monsterId: 'witch_encounter',
     minionId: 'skeleton_warrior',
     minionCount: 4,
+    checkpointX: 1100,
+    waves: buildWavesForLevel(2200, 'skeleton_warrior', 'witch_encounter'),
     gemsInLevel: 3,
     introSpeaker: 'THE WITCH',
     introDialogue: 'Foolish warrior! Your stone is not yet awakened. Witness the true power of my curse!',
-    clearNote: 'At low health, the Witch unleashed her dark curse and escaped! Journey to the Frozen Mountains to awaken the Stone.',
+    clearNote: 'At 35% health, the Witch unleashed her dark curse and escaped! Journey to the Frozen Mountains to awaken the Stone.',
   },
   {
     level: 7,
@@ -500,9 +742,11 @@ export const LEVELS_DATA: LevelInfo[] = [
     monsterId: 'ice_wolf',
     minionId: 'ice_wolf',
     minionCount: 7,
+    checkpointX: 1200,
+    waves: buildWavesForLevel(2400, 'ice_wolf', 'ice_wolf'),
     gemsInLevel: 3,
     introSpeaker: 'THE WARRIOR',
-    introDialogue: 'Fierce Ice Wolves stalk the Frozen Valley. Keep moving!',
+    introDialogue: 'Fierce Ice Wolves stalk the Frozen Valley. Keep your stamina ready!',
     clearNote: 'You crossed the Frozen Valley and reached the Ice Monster’s Cave.',
   },
   {
@@ -514,6 +758,8 @@ export const LEVELS_DATA: LevelInfo[] = [
     monsterId: 'ice_golem',
     minionId: 'ice_wolf',
     minionCount: 7,
+    checkpointX: 1300,
+    waves: buildWavesForLevel(2600, 'ice_wolf', 'ice_golem'),
     gemsInLevel: 3,
     introSpeaker: 'THE WARRIOR',
     introDialogue: 'Colossal Ice Golems guard the glacier heart!',
@@ -528,6 +774,8 @@ export const LEVELS_DATA: LevelInfo[] = [
     monsterId: 'frost_guardian',
     minionId: 'ice_golem',
     minionCount: 5,
+    checkpointX: 1350,
+    waves: buildWavesForLevel(2700, 'ice_golem', 'frost_guardian'),
     gemsInLevel: 3,
     introSpeaker: 'FROST GUARDIAN',
     introDialogue: 'Face my Ice Smash and Freeze Wave to awaken the Ancient Stone!',
@@ -542,6 +790,8 @@ export const LEVELS_DATA: LevelInfo[] = [
     monsterId: 'fire_hound',
     minionId: 'fire_hound',
     minionCount: 8,
+    checkpointX: 1350,
+    waves: buildWavesForLevel(2700, 'fire_hound', 'fire_hound'),
     gemsInLevel: 3,
     introSpeaker: 'THE WARRIOR',
     introDialogue: 'The Cursed Kingdom burns! Watch out for the blazing Fire Hounds!',
@@ -556,6 +806,8 @@ export const LEVELS_DATA: LevelInfo[] = [
     monsterId: 'shadow_mage',
     minionId: 'fire_hound',
     minionCount: 8,
+    checkpointX: 1400,
+    waves: buildWavesForLevel(2800, 'fire_hound', 'shadow_mage'),
     gemsInLevel: 3,
     introSpeaker: 'SHADOW MAGE',
     introDialogue: 'Our dark magic will consume your soul within the Shadow Temple!',
@@ -570,6 +822,8 @@ export const LEVELS_DATA: LevelInfo[] = [
     monsterId: 'cursed_knight',
     minionId: 'shadow_mage',
     minionCount: 6,
+    checkpointX: 1450,
+    waves: buildWavesForLevel(2900, 'shadow_mage', 'cursed_knight'),
     gemsInLevel: 3,
     introSpeaker: 'CURSED KNIGHT',
     introDialogue: 'My magma armor is unbreakable! None shall pass into the Witch’s sanctum!',
@@ -584,6 +838,8 @@ export const LEVELS_DATA: LevelInfo[] = [
     monsterId: 'witch_final',
     minionId: 'cursed_knight',
     minionCount: 4,
+    checkpointX: 1250,
+    waves: buildWavesForLevel(2500, 'cursed_knight', 'witch_final'),
     gemsInLevel: 3,
     introSpeaker: 'THE WITCH (FINAL FORM)',
     introDialogue: 'Behold my winged final form! Only the Ancient Stone can pierce my dark curse barrier!',
