@@ -1,5 +1,6 @@
 import React from 'react';
-import { Text, View } from 'react-native';
+import { Image, Text, View } from 'react-native';
+import { WORLD_BACKGROUNDS } from '../constants/gameAssets';
 
 interface Theme {
   skyTop: string;
@@ -164,22 +165,43 @@ function tiles(width: number, cam: number, factor: number, content: React.ReactE
 
 const BackgroundImpl: React.FC<BgProps> = ({ worldId, cameraX, width, height, horizonY, t }) => {
   const th = THEMES[worldId] || THEMES[1];
-  const bands = 9;
+  const bgImg = WORLD_BACKGROUNDS[worldId];
   const parts: React.ReactElement[] = [];
-  for (let i = 0; i < bands; i++) {
+
+  if (bgImg) {
+    const bgWidth = Math.max(width * 1.5, 960);
+    const bgShift = (cameraX * 0.12) % (bgWidth - width);
     parts.push(
-      <View key={`s${i}`} style={{ position: 'absolute', left: 0, right: 0, top: (height / bands) * i, height: height / bands + 1, backgroundColor: mix(th.skyTop, th.skyBottom, i / (bands - 1)) }} />
+      <Image
+        key="bgImg"
+        source={bgImg}
+        resizeMode="cover"
+        style={{
+          position: 'absolute',
+          left: -bgShift,
+          top: 0,
+          width: bgWidth,
+          height: height,
+        }}
+      />
     );
+  } else {
+    const bands = 9;
+    for (let i = 0; i < bands; i++) {
+      parts.push(
+        <View key={`s${i}`} style={{ position: 'absolute', left: 0, right: 0, top: (height / bands) * i, height: height / bands + 1, backgroundColor: mix(th.skyTop, th.skyBottom, i / (bands - 1)) }} />
+      );
+    }
+    if (th.orb) {
+      parts.push(
+        <View key="orb" style={{ position: 'absolute', left: width * 0.74 - ((cameraX * 0.02) % 40), top: height * 0.1, width: 46, height: 46, borderRadius: 23, backgroundColor: th.orb, opacity: 0.55 }} />
+      );
+    }
+    parts.push(...tiles(width, cameraX, 0.12, farContent(th, height, horizonY), 'far'));
+    parts.push(<View key="mist1" style={{ position: 'absolute', left: 0, right: 0, top: horizonY - 56, height: 56, backgroundColor: th.mist }} />);
+    parts.push(...tiles(width, cameraX, 0.32, midContent(th, height, horizonY), 'mid'));
+    parts.push(<View key="mist2" style={{ position: 'absolute', left: 0, right: 0, top: horizonY - 24, height: 24, backgroundColor: th.mist }} />);
   }
-  if (th.orb) {
-    parts.push(
-      <View key="orb" style={{ position: 'absolute', left: width * 0.74 - ((cameraX * 0.02) % 40), top: height * 0.1, width: 46, height: 46, borderRadius: 23, backgroundColor: th.orb, opacity: 0.55 }} />
-    );
-  }
-  parts.push(...tiles(width, cameraX, 0.12, farContent(th, height, horizonY), 'far'));
-  parts.push(<View key="mist1" style={{ position: 'absolute', left: 0, right: 0, top: horizonY - 56, height: 56, backgroundColor: th.mist }} />);
-  parts.push(...tiles(width, cameraX, 0.32, midContent(th, height, horizonY), 'mid'));
-  parts.push(<View key="mist2" style={{ position: 'absolute', left: 0, right: 0, top: horizonY - 24, height: 24, backgroundColor: th.mist }} />);
 
   // Atmospheric particles
   for (let i = 0; i < 16; i++) {

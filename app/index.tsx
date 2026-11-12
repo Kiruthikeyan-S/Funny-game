@@ -1,7 +1,9 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Haptics from 'expo-haptics';
+import * as ScreenOrientation from 'expo-screen-orientation';
 import React, { useEffect, useRef, useState } from 'react';
 import {
+  Image,
   Platform,
   Pressable,
   ScrollView,
@@ -14,6 +16,12 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { ParallaxBackground, WorldDecor } from '../components/GameBackground';
 import { MonsterArt, WarriorArt } from '../components/MonsterSprites';
+import {
+  MONSTER_CARDS,
+  MONSTER_SPRITES,
+  WARRIOR_SPRITE,
+  WORLD_BACKGROUNDS,
+} from '../constants/gameAssets';
 import {
   LEVELS_DATA,
   LevelInfo,
@@ -46,7 +54,12 @@ import {
   STAGE_HEIGHT,
   stepEngineFrame,
 } from '../engine/combatEngine';
-import { clamp, computeControlSizes, computeStageScale } from '../utils/gameLayout';
+import {
+  clamp,
+  computeControlLayout,
+  computeHudLayout,
+  computeStageScale,
+} from '../utils/gameLayout';
 
 type ScreenState =
   | 'MAIN_MENU'
@@ -1015,8 +1028,16 @@ export default function CursedKingdomGame() {
                             Level {lvl.level} {unlocked ? '🔓' : '🔒'}
                           </Text>
                           <Text style={styles.planLevelSub}>{lvl.name}</Text>
-                          <View style={{ marginVertical: 6 }}>
-                            <MonsterArt monsterId={m.id} size={56} />
+                          <View style={{ marginVertical: 6, alignItems: 'center' }}>
+                            {MONSTER_CARDS[m.id] ? (
+                              <Image
+                                source={MONSTER_CARDS[m.id]}
+                                style={{ width: 56, height: 56, borderRadius: 6, borderWidth: 1, borderColor: '#ffd152' }}
+                                resizeMode="cover"
+                              />
+                            ) : (
+                              <MonsterArt monsterId={m.id} size={56} />
+                            )}
                           </View>
                           <Text style={styles.planMonsterName}>{m.name}</Text>
                           <Text style={styles.galleryMonsterLv}>
@@ -1078,7 +1099,17 @@ export default function CursedKingdomGame() {
                   setSelectedMonster(m);
                   setScreen('MONSTER_DETAIL');
                 }}>
-                <MonsterArt monsterId={m.id} size={60} />
+                <View style={{ alignItems: 'center', marginBottom: 4 }}>
+                  {MONSTER_CARDS[m.id] ? (
+                    <Image
+                      source={MONSTER_CARDS[m.id]}
+                      style={{ width: 64, height: 64, borderRadius: 8, borderWidth: 1.5, borderColor: '#ffd152' }}
+                      resizeMode="cover"
+                    />
+                  ) : (
+                    <MonsterArt monsterId={m.id} size={60} />
+                  )}
+                </View>
                 <Text style={styles.galleryMonsterName}>{m.name}</Text>
                 <Text style={styles.galleryMonsterLv}>
                   Lv {m.level} • {m.difficulty}
@@ -1140,7 +1171,17 @@ export default function CursedKingdomGame() {
         <View style={[styles.monsterDetailFrame, { borderColor: m.themeColor }]}>
           <View style={styles.monsterDetailTopRow}>
             <View style={styles.monsterDetailPortrait}>
-              <MonsterArt monsterId={m.id} size={100} />
+              <View style={{ alignItems: 'center', marginBottom: 6 }}>
+                {MONSTER_CARDS[m.id] ? (
+                  <Image
+                    source={MONSTER_CARDS[m.id]}
+                    style={{ width: 130, height: 130, borderRadius: 10, borderWidth: 2, borderColor: '#ffd152' }}
+                    resizeMode="cover"
+                  />
+                ) : (
+                  <MonsterArt monsterId={m.id} size={100} />
+                )}
+              </View>
               <Text style={styles.monsterHeartsText}>
                 {'❤️'.repeat(m.hearts)}
               </Text>
@@ -1593,11 +1634,10 @@ export default function CursedKingdomGame() {
   }
 
   // ==========================================================================
-  // 13. GAMEPLAY SCREEN — RESPONSIVE 3-SECTION LAYOUT (HUD / STAGE / CONTROLS)
+  // 13. GAMEPLAY SCREEN — STRICT HORIZONTAL LANDSCAPE REFERENCE LAYOUT
   // ==========================================================================
   const state = engineRef.current;
   const p = state.player;
-  const isLandscape = winWidth > winHeight;
   const hpPercent = Math.max(0, Math.min(100, (hud.hp / hud.maxHp) * 100));
   const staPercent = Math.max(0, Math.min(100, (hud.stamina / hud.maxStamina) * 100));
   const enemyHpPercent = Math.max(
@@ -1609,30 +1649,28 @@ export default function CursedKingdomGame() {
   const activeWaveDef = state.level.waves[state.currentWave - 1];
   const stageBossMonster = MONSTERS_DATA[currentLevel.monsterId];
 
-  const fs = clamp(isLandscape ? winHeight / 32 : winWidth / 36, 9, 12.5);
-  const barW = clamp(isLandscape ? winWidth * 0.16 : winWidth * 0.23, 72, 130);
-  const avatar = clamp(fs * 3.3, 34, 46);
-  const ctl = computeControlSizes(winWidth, winHeight, isLandscape);
+  // Responsive sizing for horizontal landscape
+  const screenW = winWidth;
+  const screenH = winHeight;
+  const ctl = computeControlLayout(screenW, screenH);
+  const hudLayout = computeHudLayout(screenW, screenH);
+  const u = hudLayout.u;
 
-  const { scale, logicalW } = computeStageScale(stageBox.w || winWidth, stageBox.h || 300, isLandscape);
+  const { scale, logicalW } = computeStageScale(screenW, screenH);
   logicalWRef.current = logicalW;
-  const stageH = stageBox.h || 300;
-  const contentTop = Math.max(0, stageH - STAGE_HEIGHT * scale);
+  const stageH = screenH;
   const horizonY = stageH - (STAGE_HEIGHT - GROUND_Y) * scale;
   const camInt = Math.round(state.cameraX);
   const tBucket = Math.floor(Date.now() / 80);
-  const ready = stageBox.w > 0 && stageBox.h > 0;
 
-  const renderControls = () => (
-    <View
-      style={[
-        isLandscape ? gs.controlsOverlay : gs.controlsSection,
-        { paddingHorizontal: ctl.pad },
-      ]}>
-      <View style={{ flexDirection: 'row', gap: ctl.gap, alignItems: 'flex-end' }}>
+  const renderReferenceControls = () => (
+    <View pointerEvents="box-none" style={gs.controlsOverlay}>
+      {/* LEFT D-PAD CONTROLS */}
+      <View style={gs.dpadRow}>
         <GameBtn
           size={ctl.big}
           icon="◀"
+          borderColor="#4cc9f0"
           onPressIn={() => {
             state.controls.left = true;
           }}
@@ -1643,6 +1681,7 @@ export default function CursedKingdomGame() {
         <GameBtn
           size={ctl.big}
           icon="▶"
+          borderColor="#4cc9f0"
           onPressIn={() => {
             state.controls.right = true;
           }}
@@ -1652,473 +1691,496 @@ export default function CursedKingdomGame() {
         />
       </View>
 
-      <View style={{ gap: ctl.gap, alignItems: 'flex-end' }}>
-        <View style={{ flexDirection: 'row', gap: ctl.gap }}>
-          <GameBtn
-            size={ctl.small}
-            icon="🧪"
-            label={`x${hud.potionsLeft}`}
-            color="#52b788"
-            dim={hud.potionsLeft <= 0}
-            onPressIn={() => {
-              if (playerUsePotion(state)) vibrate('medium');
-            }}
-          />
-          <GameBtn
-            size={ctl.small}
-            icon="💨"
-            label="DODGE"
-            onPressIn={() => {
-              if (playerDodge(state)) vibrate('light');
-            }}
-          />
-          <GameBtn
-            size={ctl.small}
-            icon="🛡️"
-            label="BLOCK"
-            active={p.blocking}
-            color={p.blocking ? '#38e4ae' : '#9c89b8'}
-            onPressIn={() => {
-              state.controls.block = true;
-            }}
-            onPressOut={() => {
-              state.controls.block = false;
-            }}
-          />
-          <GameBtn
-            size={ctl.small}
-            icon="🌀"
-            label={skillReady ? 'SKILL' : `${skillCooldownSec}s`}
-            color="#38e4ae"
-            dim={!skillReady}
-            onPressIn={() => {
-              if (playerStoneSkill(state)) vibrate('heavy');
-            }}
-          />
-        </View>
-        <View style={{ flexDirection: 'row', gap: ctl.gap, alignItems: 'center' }}>
-          <GameBtn
-            size={ctl.small}
-            icon="⚒️"
-            label="HEAVY"
-            color="#ff70a6"
-            onPressIn={() => {
-              if (playerHeavyAttack(state)) vibrate('medium');
-            }}
-          />
-          <GameBtn
-            size={ctl.bigAction}
-            icon="🗡️"
-            label={`C${p.comboStep}`}
-            color="#ffd152"
-            fill="rgba(158,59,24,0.92)"
-            onPressIn={() => {
-              if (playerSwordAttack(state)) vibrate('light');
-            }}
-          />
-          <GameBtn
-            size={ctl.bigAction}
-            icon="⬆"
-            label="JUMP"
-            color="#ffd152"
-            onPressIn={() => {
-              if (playerJump(state)) vibrate('light');
-            }}
-          />
-        </View>
+      {/* RIGHT ACTION BAR CONTROLS (HORIZONTAL ROW) */}
+      <View style={gs.actionRow}>
+        <GameBtn
+          size={ctl.mid}
+          icon="🧪"
+          badge={`${hud.potionsLeft}`}
+          borderColor="#52b788"
+          dim={hud.potionsLeft <= 0}
+          onPressIn={() => {
+            if (playerUsePotion(state)) vibrate('medium');
+          }}
+        />
+        <GameBtn
+          size={ctl.mid}
+          icon="🛡️"
+          label="BLOCK"
+          active={p.blocking}
+          borderColor={p.blocking ? '#38e4ae' : '#4361ee'}
+          onPressIn={() => {
+            state.controls.block = true;
+          }}
+          onPressOut={() => {
+            state.controls.block = false;
+          }}
+        />
+        <GameBtn
+          size={ctl.mid}
+          icon="🌀"
+          label={skillReady ? 'SKILL' : `${skillCooldownSec}s`}
+          borderColor="#00b4d8"
+          dim={!skillReady}
+          onPressIn={() => {
+            if (playerStoneSkill(state)) vibrate('heavy');
+          }}
+        />
+        <GameBtn
+          size={ctl.mid}
+          icon="🏃"
+          label="DODGE"
+          borderColor="#f77f00"
+          onPressIn={() => {
+            if (playerDodge(state)) vibrate('light');
+          }}
+        />
+        <GameBtn
+          size={ctl.mid}
+          icon="⚒️"
+          label="HEAVY"
+          borderColor="#ff70a6"
+          onPressIn={() => {
+            if (playerHeavyAttack(state)) vibrate('medium');
+          }}
+        />
+        <GameBtn
+          size={ctl.attack}
+          icon="🗡️"
+          label={`C${p.comboStep}`}
+          borderColor="#ffd152"
+          fill="rgba(180,35,25,0.95)"
+          onPressIn={() => {
+            if (playerSwordAttack(state)) vibrate('light');
+          }}
+        />
+        <GameBtn
+          size={ctl.big}
+          icon="⬆"
+          label="JUMP"
+          borderColor="#ffd152"
+          onPressIn={() => {
+            if (playerJump(state)) vibrate('light');
+          }}
+        />
       </View>
     </View>
   );
 
   return (
-    <SafeAreaView
-      style={[gs.root, { backgroundColor: currentWorld.bgTop }]}
-      edges={['top', 'bottom', 'left', 'right']}>
-      {/* ===== TOP HUD SECTION ===== */}
-      <View style={[gs.hudSection, !isLandscape && { flex: 17, minHeight: 84 }]}>
-        <View style={gs.hudRow}>
-          {/* LEFT: portrait + HP + stamina */}
-          <View style={gs.hudLeft}>
+    <View style={gs.fullscreenRoot}>
+      {/* ===== FULL-SCREEN GAMEPLAY STAGE (ZERO LETTERBOXING) ===== */}
+      <View style={StyleSheet.absoluteFill}>
+        <ParallaxBackground
+          worldId={currentWorld.id}
+          cameraX={camInt}
+          width={screenW}
+          height={stageH}
+          horizonY={horizonY}
+          t={tBucket}
+        />
+
+        {/* Scaled logical world (engine coordinates unchanged) */}
+        <View
+          style={{
+            position: 'absolute',
+            left: 0,
+            top: 0,
+            width: logicalW,
+            height: STAGE_HEIGHT,
+            transform: [{ scale }],
+            transformOrigin: 'top left',
+          }}>
+          <WorldDecor
+            worldId={currentWorld.id}
+            levelLength={currentLevel.length}
+            cameraX={camInt}
+            viewW={logicalW}
+            groundY={GROUND_Y}
+            stageH={STAGE_HEIGHT}
+            groundColor={currentWorld.groundColor}
+            groundTop={currentWorld.groundTop}
+          />
+
+          {/* Platforms */}
+          {state.platforms.map((pl, idx) => {
+            const sx = pl.x - state.cameraX;
+            if (sx < -140 || sx > logicalW + 60) return null;
+            return (
+              <View key={idx} style={{ position: 'absolute', left: sx, top: pl.y, width: pl.w, height: pl.h + 6 }}>
+                <View
+                  style={{
+                    position: 'absolute',
+                    left: 0,
+                    top: 0,
+                    right: 0,
+                    height: pl.h,
+                    backgroundColor: currentWorld.groundColor,
+                    borderTopWidth: 4,
+                    borderTopColor: currentWorld.groundTop,
+                    borderRadius: 3,
+                    borderWidth: 1,
+                    borderColor: 'rgba(0,0,0,0.35)',
+                  }}>
+                  <View style={{ position: 'absolute', left: 6, top: 5, width: 22, height: 4, backgroundColor: 'rgba(0,0,0,0.25)' }} />
+                  <View style={{ position: 'absolute', left: 52, top: 6, width: 26, height: 4, backgroundColor: 'rgba(255,255,255,0.12)' }} />
+                </View>
+                <View style={{ position: 'absolute', left: 12, top: pl.h, width: 3, height: 6, backgroundColor: currentWorld.groundTop }} />
+                <View style={{ position: 'absolute', left: pl.w - 26, top: pl.h, width: 3, height: 5, backgroundColor: currentWorld.groundTop }} />
+              </View>
+            );
+          })}
+
+          {/* Checkpoint */}
+          <View style={{ position: 'absolute', left: state.checkpointX - state.cameraX, top: GROUND_Y - 40 }}>
+            <Text style={{ fontSize: 24 }}>{state.checkpointActivated ? '✨' : '🚩'}</Text>
+          </View>
+
+          {/* Wave gate */}
+          {!state.allWavesCleared && activeWaveDef && (
             <View
-              style={[
-                gs.avatar,
-                { width: avatar, height: avatar, borderRadius: avatar / 2 },
-                hud.lowHealth && { borderColor: '#ff2a55' },
-              ]}>
+              style={{
+                position: 'absolute',
+                left: activeWaveDef.gateX - state.cameraX + 36,
+                top: 0,
+                height: GROUND_Y,
+                width: 4,
+                backgroundColor: 'rgba(247,37,133,0.55)',
+              }}
+            />
+          )}
+
+          {/* Collectibles */}
+          {state.items.map((it) => {
+            if (it.collected) return null;
+            const sx = it.x - state.cameraX;
+            if (sx < -40 || sx > logicalW + 40) return null;
+            return (
+              <Text key={it.id} style={{ position: 'absolute', left: sx - 10, top: it.y - 10, fontSize: 16 }}>
+                {it.type === 'coin' ? '🪙' : it.type === 'gem' ? '💎' : it.type === 'potion' ? '🧪' : '❤️'}
+              </Text>
+            );
+          })}
+
+          {/* Portal */}
+          <Text
+            style={{
+              position: 'absolute',
+              left: state.portalX - state.cameraX,
+              top: GROUND_Y - 56,
+              fontSize: 34,
+              opacity: state.allWavesCleared ? 1 : 0.45,
+            }}>
+            ⛩️
+          </Text>
+
+          {/* Projectiles */}
+          {state.projectiles.map((proj) => {
+            const sx = proj.x - state.cameraX;
+            if (sx < -30 || sx > logicalW + 30) return null;
+            return (
+              <View
+                key={proj.id}
+                style={{
+                  position: 'absolute',
+                  left: sx - proj.radius,
+                  top: proj.y - proj.radius,
+                  width: proj.radius * 2,
+                  height: proj.radius * 2,
+                  borderRadius: proj.radius,
+                  backgroundColor: proj.color,
+                  borderWidth: 1.5,
+                  borderColor: '#ffffff',
+                }}
+              />
+            );
+          })}
+
+          {/* Enemies (using transparent cutouts and 9-state AI) */}
+          {state.enemies.map((e) => {
+            const sx = e.x - state.cameraX;
+            if (sx < -90 || sx > logicalW + 90) return null;
+            const ePct = Math.max(0, Math.min(100, (e.hp / e.maxHp) * 100));
+            const art = Math.round(e.w * 1.3);
+            return (
+              <View
+                key={e.id}
+                style={{
+                  position: 'absolute',
+                  left: sx,
+                  top: e.y,
+                  width: e.w,
+                  height: e.h,
+                  opacity: e.aiState === 'DEAD' ? 0.35 : e.aiState === 'HURT' ? 0.65 : 1,
+                }}>
+                <View style={{ position: 'absolute', left: (e.w - 38) / 2, top: -14, width: 38, height: 5, backgroundColor: '#2b1218', borderRadius: 2, overflow: 'hidden', borderWidth: 0.5, borderColor: '#adb5bd' }}>
+                  <View style={{ height: '100%', width: `${ePct}%`, backgroundColor: e.isBoss ? '#ff2a55' : '#e63946' }} />
+                </View>
+                {e.aiState === 'PREPARE_ATTACK' && (
+                  <Text style={{ position: 'absolute', left: e.w / 2 - 8, top: -30, fontSize: 14 }}>⚠️</Text>
+                )}
+                {e.aiState === 'DETECT' && (
+                  <Text style={{ position: 'absolute', left: e.w / 2 - 6, top: -30, fontSize: 14 }}>❗</Text>
+                )}
+                <View
+                  style={{
+                    position: 'absolute',
+                    left: -(art - e.w) / 2,
+                    bottom: -2,
+                    width: art,
+                    height: art,
+                    transform: [{ scaleX: e.facing < 0 ? 1 : -1 }],
+                  }}>
+                  <MonsterArt monsterId={e.monsterId} size={art} />
+                </View>
+              </View>
+            );
+          })}
+
+          {/* Warrior (hero knight in silver-blue armor & red cape) */}
+          <View
+            style={{
+              position: 'absolute',
+              left: p.x - state.cameraX,
+              top: p.y,
+              width: p.w,
+              height: p.h,
+              opacity: p.dodgeTimer > 0 ? 0.6 : 1,
+            }}>
+            <View
+              style={{
+                position: 'absolute',
+                left: -8,
+                bottom: -2,
+                width: 62,
+                height: 62,
+                transform: [{ scaleX: p.facing }],
+              }}>
               <WarriorArt
-                size={avatar * 0.85}
+                size={62}
                 attacking={p.attackTimer > 0}
                 heavyAttacking={p.heavyAttackTimer > 0}
                 blocking={p.blocking}
               />
             </View>
-            <View style={{ width: barW }}>
-              <Text
-                numberOfLines={1}
-                style={[gs.hudText, { fontSize: fs }, hud.lowHealth && { color: '#ff6b81' }]}>
-                {hud.lowHealth ? '⚠ ' : '❤ '}
-                {Math.ceil(hud.hp)}/{hud.maxHp}
-              </Text>
-              <View style={gs.barTrack}>
-                <View
-                  style={{
-                    height: '100%',
-                    width: `${hpPercent}%`,
-                    backgroundColor: hud.lowHealth ? '#e63946' : '#52b788',
-                  }}
-                />
-              </View>
-              <View style={[gs.barTrack, { height: 6, marginTop: 3 }]}>
-                <View style={{ height: '100%', width: `${staPercent}%`, backgroundColor: '#e9b44c' }} />
-              </View>
-              <Text numberOfLines={1} style={[gs.subText, { fontSize: fs - 2 }]}>
-                STA {Math.floor(hud.stamina)}
-                {hud.poisoned ? ' 🧪PSN' : ''}
-                {hud.rooted ? ' 🌿ROOT' : ''}
-              </Text>
-            </View>
           </View>
 
-          {/* CENTER: world / level / wave */}
-          <View style={gs.hudCenter}>
-            <Text numberOfLines={1} style={[gs.centerTitle, { fontSize: fs }]}>
-              W{currentWorld.id} · Lv {currentLevel.level}
+          {/* Floating damage numbers */}
+          {state.damageIndicators.map((ind) => (
+            <Text
+              key={ind.id}
+              style={[
+                gs.damageText,
+                { left: ind.x - state.cameraX - 28, top: ind.y, color: ind.color },
+              ]}>
+              {ind.text}
             </Text>
-            <Text numberOfLines={1} style={[gs.centerName, { fontSize: fs - 1 }]}>
-              {currentLevel.name}
-            </Text>
-            <Text numberOfLines={1} style={[gs.centerWave, { fontSize: fs - 1 }]}>
-              Wave {hud.currentWave}/{hud.totalWaves} · Foes {hud.remainingEnemies}
-            </Text>
-          </View>
-
-          {/* RIGHT: currency + pause */}
-          <View style={gs.hudRight}>
-            <View style={{ alignItems: 'flex-end' }}>
-              <Text numberOfLines={1} style={[gs.hudText, { fontSize: fs }]}>
-                🪙 {hud.coins}
-              </Text>
-              <Text numberOfLines={1} style={[gs.hudText, { fontSize: fs - 1 }]}>
-                💎 {hud.gems}  🧪 {hud.potionsLeft}
-              </Text>
-            </View>
-            <Pressable
-              hitSlop={8}
-              style={({ pressed }) => [gs.pauseBtn, pressed && { opacity: 0.7 }]}
-              onPress={() => {
-                state.running = false;
-                setScreen('PAUSE');
-              }}>
-              <Text style={gs.pauseText}>II</Text>
-            </Pressable>
-          </View>
+          ))}
         </View>
-
-        {/* Compact enemy / boss row (never clipped: flex + truncation) */}
-        <View style={[gs.enemyRow, hud.targetEnemyIsBoss && { borderColor: '#e63946' }]}>
-          {hud.targetEnemyHp > 0 ? (
-            <>
-              <MonsterArt monsterId={hud.targetEnemyId} size={fs * 2} />
-              <Text numberOfLines={1} style={[gs.enemyName, { fontSize: fs - 1 }]}>
-                {hud.targetEnemyIsBoss ? '👑 ' : ''}
-                {hud.targetEnemyName}
-                {hud.targetEnemyIsBoss ? ` P${hud.targetBossPhase}` : ''}
-                {hud.targetHasShield ? ' 🛡' : ''}
-              </Text>
-              <View style={[gs.barTrack, { flex: 1.2, height: 8, marginTop: 0 }]}>
-                <View
-                  style={{
-                    height: '100%',
-                    width: `${enemyHpPercent}%`,
-                    backgroundColor: hud.targetEnemyIsBoss ? '#ff2a55' : '#e63946',
-                  }}
-                />
-              </View>
-              <Text numberOfLines={1} style={[gs.enemyHp, { fontSize: fs - 2 }]}>
-                {hud.targetEnemyHp}/{hud.targetEnemyMaxHp}
-              </Text>
-            </>
-          ) : (
-            <Text numberOfLines={1} style={[gs.enemyName, { fontSize: fs - 1, opacity: 0.7 }]}>
-              {state.allWavesCleared ? '✔ Area clear — head to the portal ⛩' : 'No enemy in range'}
-            </Text>
-          )}
-        </View>
-      </View>
-
-      {/* ===== MIDDLE: GAMEPLAY STAGE ===== */}
-      <View
-        style={[
-          gs.stageFrame,
-          { borderColor: hud.lowHealth ? '#e63946' : currentWorld.groundTop },
-          !isLandscape && { flex: 61 },
-        ]}
-        onLayout={(e) => {
-          const { width, height } = e.nativeEvent.layout;
-          if (Math.abs(width - stageBox.w) > 1 || Math.abs(height - stageBox.h) > 1) {
-            setStageBox({ w: width, h: height });
-          }
-        }}>
-        {ready && (
-          <>
-            <ParallaxBackground
-              worldId={currentWorld.id}
-              cameraX={camInt}
-              width={stageBox.w}
-              height={stageH}
-              horizonY={horizonY}
-              t={tBucket}
-            />
-
-            {/* Scaled logical world (engine coordinates unchanged) */}
-            <View
-              style={{
-                position: 'absolute',
-                left: 0,
-                top: contentTop,
-                width: logicalW,
-                height: STAGE_HEIGHT,
-                transform: [{ scale }],
-                transformOrigin: 'top left',
-              }}>
-              <WorldDecor
-                worldId={currentWorld.id}
-                levelLength={currentLevel.length}
-                cameraX={camInt}
-                viewW={logicalW}
-                groundY={GROUND_Y}
-                stageH={STAGE_HEIGHT}
-                groundColor={currentWorld.groundColor}
-                groundTop={currentWorld.groundTop}
-              />
-
-              {/* Platforms */}
-              {state.platforms.map((pl, idx) => {
-                const sx = pl.x - state.cameraX;
-                if (sx < -140 || sx > logicalW + 60) return null;
-                return (
-                  <View key={idx} style={{ position: 'absolute', left: sx, top: pl.y, width: pl.w, height: pl.h + 6 }}>
-                    <View
-                      style={{
-                        position: 'absolute',
-                        left: 0,
-                        top: 0,
-                        right: 0,
-                        height: pl.h,
-                        backgroundColor: currentWorld.groundColor,
-                        borderTopWidth: 4,
-                        borderTopColor: currentWorld.groundTop,
-                        borderRadius: 3,
-                        borderWidth: 1,
-                        borderColor: 'rgba(0,0,0,0.35)',
-                      }}>
-                      <View style={{ position: 'absolute', left: 6, top: 5, width: 22, height: 4, backgroundColor: 'rgba(0,0,0,0.25)' }} />
-                      <View style={{ position: 'absolute', left: 52, top: 6, width: 26, height: 4, backgroundColor: 'rgba(255,255,255,0.12)' }} />
-                    </View>
-                    <View style={{ position: 'absolute', left: 12, top: pl.h, width: 3, height: 6, backgroundColor: currentWorld.groundTop }} />
-                    <View style={{ position: 'absolute', left: pl.w - 26, top: pl.h, width: 3, height: 5, backgroundColor: currentWorld.groundTop }} />
-                  </View>
-                );
-              })}
-
-              {/* Checkpoint */}
-              <View style={{ position: 'absolute', left: state.checkpointX - state.cameraX, top: GROUND_Y - 40 }}>
-                <Text style={{ fontSize: 24 }}>{state.checkpointActivated ? '✨' : '🚩'}</Text>
-              </View>
-
-              {/* Wave gate */}
-              {!state.allWavesCleared && activeWaveDef && (
-                <View
-                  style={{
-                    position: 'absolute',
-                    left: activeWaveDef.gateX - state.cameraX + 36,
-                    top: 0,
-                    height: GROUND_Y,
-                    width: 4,
-                    backgroundColor: 'rgba(247,37,133,0.55)',
-                  }}
-                />
-              )}
-
-              {/* Collectibles */}
-              {state.items.map((it) => {
-                if (it.collected) return null;
-                const sx = it.x - state.cameraX;
-                if (sx < -40 || sx > logicalW + 40) return null;
-                return (
-                  <Text key={it.id} style={{ position: 'absolute', left: sx - 10, top: it.y - 10, fontSize: 16 }}>
-                    {it.type === 'coin' ? '🪙' : it.type === 'gem' ? '💎' : it.type === 'potion' ? '🧪' : '❤️'}
-                  </Text>
-                );
-              })}
-
-              {/* Portal */}
-              <Text
-                style={{
-                  position: 'absolute',
-                  left: state.portalX - state.cameraX,
-                  top: GROUND_Y - 56,
-                  fontSize: 34,
-                  opacity: state.allWavesCleared ? 1 : 0.45,
-                }}>
-                ⛩️
-              </Text>
-
-              {/* Projectiles */}
-              {state.projectiles.map((proj) => {
-                const sx = proj.x - state.cameraX;
-                if (sx < -30 || sx > logicalW + 30) return null;
-                return (
-                  <View
-                    key={proj.id}
-                    style={{
-                      position: 'absolute',
-                      left: sx - proj.radius,
-                      top: proj.y - proj.radius,
-                      width: proj.radius * 2,
-                      height: proj.radius * 2,
-                      borderRadius: proj.radius,
-                      backgroundColor: proj.color,
-                      borderWidth: 1.5,
-                      borderColor: '#ffffff',
-                    }}
-                  />
-                );
-              })}
-
-              {/* Enemies (art drawn 1.3x hitbox for readability) */}
-              {state.enemies.map((e) => {
-                const sx = e.x - state.cameraX;
-                if (sx < -90 || sx > logicalW + 90) return null;
-                const ePct = Math.max(0, Math.min(100, (e.hp / e.maxHp) * 100));
-                const art = Math.round(e.w * 1.3);
-                return (
-                  <View
-                    key={e.id}
-                    style={{
-                      position: 'absolute',
-                      left: sx,
-                      top: e.y,
-                      width: e.w,
-                      height: e.h,
-                      opacity: e.aiState === 'DEAD' ? 0.35 : e.aiState === 'HURT' ? 0.65 : 1,
-                    }}>
-                    <View style={{ position: 'absolute', left: (e.w - 38) / 2, top: -14, width: 38, height: 5, backgroundColor: '#2b1218', borderRadius: 2, overflow: 'hidden', borderWidth: 0.5, borderColor: '#adb5bd' }}>
-                      <View style={{ height: '100%', width: `${ePct}%`, backgroundColor: e.isBoss ? '#ff2a55' : '#e63946' }} />
-                    </View>
-                    {e.aiState === 'PREPARE_ATTACK' && (
-                      <Text style={{ position: 'absolute', left: e.w / 2 - 8, top: -30, fontSize: 14 }}>⚠️</Text>
-                    )}
-                    {e.aiState === 'DETECT' && (
-                      <Text style={{ position: 'absolute', left: e.w / 2 - 6, top: -30, fontSize: 14 }}>❗</Text>
-                    )}
-                    <View
-                      style={{
-                        position: 'absolute',
-                        left: -(art - e.w) / 2,
-                        bottom: -2,
-                        width: art,
-                        height: art,
-                        transform: [{ scaleX: e.facing < 0 ? 1 : -1 }],
-                      }}>
-                      <MonsterArt monsterId={e.monsterId} size={art} />
-                    </View>
-                  </View>
-                );
-              })}
-
-              {/* Warrior (art 1.3x hitbox) */}
-              <View
-                style={{
-                  position: 'absolute',
-                  left: p.x - state.cameraX,
-                  top: p.y,
-                  width: p.w,
-                  height: p.h,
-                  opacity: p.dodgeTimer > 0 ? 0.6 : 1,
-                }}>
-                <View
-                  style={{
-                    position: 'absolute',
-                    left: -8,
-                    bottom: -2,
-                    width: 62,
-                    height: 62,
-                    transform: [{ scaleX: p.facing }],
-                  }}>
-                  <WarriorArt
-                    size={62}
-                    attacking={p.attackTimer > 0}
-                    heavyAttacking={p.heavyAttackTimer > 0}
-                    blocking={p.blocking}
-                  />
-                </View>
-              </View>
-
-              {/* Floating damage numbers */}
-              {state.damageIndicators.map((ind) => (
-                <Text
-                  key={ind.id}
-                  style={[
-                    gs.damageText,
-                    { left: ind.x - state.cameraX - 28, top: ind.y, color: ind.color },
-                  ]}>
-                  {ind.text}
-                </Text>
-              ))}
-            </View>
-          </>
-        )}
 
         {p.stoneFlashTimer > 0 && <View pointerEvents="none" style={gs.flashOverlay} />}
         {hud.lowHealth && <View pointerEvents="none" style={gs.vignette} />}
-
-        {/* Overlays: banners / toast / boss intro (inside stage, top, never clipped) */}
-        <View pointerEvents="box-none" style={gs.overlayCol}>
-          {hud.bossDefeatedText ? (
-            <View style={[gs.banner, { backgroundColor: 'rgba(30,90,60,0.95)' }]}>
-              <Text numberOfLines={1} style={[gs.bannerText, { fontSize: fs }]}>{hud.bossDefeatedText}</Text>
-            </View>
-          ) : hud.bossWarningText ? (
-            <View style={[gs.banner, { backgroundColor: 'rgba(138,14,38,0.95)' }]}>
-              <Text numberOfLines={1} style={[gs.bannerText, { fontSize: fs }]}>{hud.bossWarningText}</Text>
-            </View>
-          ) : null}
-
-          {hud.bossIntroActive && (
-            <View style={gs.bossIntro}>
-              <MonsterArt monsterId={stageBossMonster.id} size={clamp(fs * 4.5, 44, 64)} />
-              <View style={{ flex: 1 }}>
-                <Text numberOfLines={1} style={[gs.bossIntroTitle, { fontSize: fs + 1 }]}>
-                  👑 {stageBossMonster.name.toUpperCase()}
-                </Text>
-                <Text numberOfLines={3} style={[gs.bossIntroDesc, { fontSize: fs - 1 }]}>
-                  {stageBossMonster.bossIntroText}
-                </Text>
-              </View>
-              <Pressable
-                style={gs.fightBtn}
-                onPress={() => {
-                  state.bossIntroTimer = 0;
-                }}>
-                <Text style={[gs.fightText, { fontSize: fs - 1 }]}>FIGHT!</Text>
-              </Pressable>
-            </View>
-          )}
-
-          {hud.toast && !hud.bossIntroActive ? (
-            <View style={gs.toast}>
-              <Text numberOfLines={2} style={[gs.toastText, { fontSize: fs - 1 }]}>{hud.toast}</Text>
-            </View>
-          ) : null}
-        </View>
-
-        {isLandscape && renderControls()}
       </View>
 
-      {/* ===== BOTTOM: CONTROLS (portrait) ===== */}
-      {!isLandscape && renderControls()}
-    </SafeAreaView>
+      {/* ===== TOP HUD OVERLAY (MATCHING REFERENCE EXACTLY) ===== */}
+      <View pointerEvents="box-none" style={gs.referenceHudRow}>
+        {/* TOP-LEFT: WARRIOR PORTRAIT + HP & STAMINA BARS */}
+        <View style={gs.refHudLeft}>
+          <View
+            style={[
+              gs.refPortraitCircle,
+              { width: Math.round(52 * u), height: Math.round(52 * u), borderRadius: Math.round(26 * u) },
+              hud.lowHealth && { borderColor: '#ff2a55' },
+            ]}>
+            <WarriorArt
+              size={Math.round(44 * u)}
+              attacking={p.attackTimer > 0}
+              heavyAttacking={p.heavyAttackTimer > 0}
+              blocking={p.blocking}
+            />
+          </View>
+
+          <View style={{ gap: 3 }}>
+            {/* Heart Row */}
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+              <View style={gs.refBadgeHeart}>
+                <Text style={{ fontSize: 11, color: '#fff' }}>❤</Text>
+              </View>
+              <View style={[gs.refBarTrack, { width: Math.round(135 * u) }]}>
+                <View
+                  style={[
+                    gs.refBarFill,
+                    {
+                      width: `${hpPercent}%`,
+                      backgroundColor: hud.lowHealth ? '#ff2a55' : '#e63946',
+                    },
+                  ]}
+                />
+                <Text style={gs.refBarNumText}>
+                  {Math.ceil(hud.hp)} / {hud.maxHp}
+                </Text>
+              </View>
+            </View>
+
+            {/* Lightning Stamina Row */}
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+              <View style={gs.refBadgeStamina}>
+                <Text style={{ fontSize: 11, color: '#fff' }}>⚡</Text>
+              </View>
+              <View style={[gs.refBarTrack, { width: Math.round(135 * u) }]}>
+                <View
+                  style={[
+                    gs.refBarFill,
+                    {
+                      width: `${staPercent}%`,
+                      backgroundColor: '#38b000',
+                    },
+                  ]}
+                />
+                <Text style={gs.refBarNumText}>
+                  {Math.floor(hud.stamina)} / {hud.maxStamina}
+                </Text>
+              </View>
+            </View>
+
+            {/* Stamina Full text */}
+            <Text
+              style={[
+                gs.refStaFullText,
+                hud.stamina < 25 && { color: '#ff6b81' },
+              ]}>
+              {hud.stamina >= hud.maxStamina - 2
+                ? 'STA FULL'
+                : hud.stamina < 25
+                ? 'EXHAUSTED'
+                : 'RECOVERING...'}
+              {hud.poisoned ? ' • 🧪POISON' : ''}
+              {hud.rooted ? ' • 🌿ROOT' : ''}
+            </Text>
+          </View>
+        </View>
+
+        {/* TOP-CENTER: GOLDEN BANNER + ATTACHED TARGET ENEMY PANEL */}
+        <View style={gs.refHudCenter}>
+          <View style={[gs.refGoldBanner, { minWidth: Math.round(230 * u) }]}>
+            <Text numberOfLines={1} style={gs.refGoldBannerTitle}>
+              World {currentWorld.id} - {currentWorld.name}
+            </Text>
+            <Text numberOfLines={1} style={gs.refGoldBannerSub}>
+              Lv. {currentLevel.level} : {currentLevel.name}
+            </Text>
+            <View style={gs.refWaveSubPill}>
+              <Text style={gs.refWaveSubText}>
+                Wave {hud.currentWave}/{hud.totalWaves} • Enemies: {hud.remainingEnemies}
+              </Text>
+            </View>
+          </View>
+
+          {/* Attached Target Enemy Row */}
+          {hud.targetEnemyHp > 0 ? (
+            <View style={gs.refTargetRow}>
+              <View style={gs.refTargetAvatar}>
+                <MonsterArt monsterId={hud.targetEnemyId} size={24} />
+              </View>
+              <View style={{ flex: 1, minWidth: 0, gap: 2 }}>
+                <Text numberOfLines={1} style={gs.refTargetName}>
+                  {hud.targetEnemyIsBoss ? '👑 ' : ''}
+                  {hud.targetEnemyName}
+                </Text>
+                <View style={gs.refTargetHpTrack}>
+                  <View
+                    style={[
+                      gs.refBarFill,
+                      {
+                        width: `${enemyHpPercent}%`,
+                        backgroundColor: hud.targetEnemyIsBoss ? '#ff2a55' : '#e63946',
+                      },
+                    ]}
+                  />
+                  <Text style={gs.refBarNumText}>
+                    {hud.targetEnemyHp} / {hud.targetEnemyMaxHp}
+                  </Text>
+                </View>
+              </View>
+            </View>
+          ) : (
+            <View style={[gs.refTargetRow, { opacity: 0.85, justifyContent: 'center' }]}>
+              <Text style={gs.refTargetName}>
+                {state.allWavesCleared ? '✨ Area Cleared! Enter Portal ⛩️' : '⚔️ In Combat'}
+              </Text>
+            </View>
+          )}
+        </View>
+
+        {/* TOP-RIGHT: CURRENCY COUNTERS + PAUSE BUTTON */}
+        <View style={gs.refHudRight}>
+          <View style={gs.refCurrencyPill}>
+            <Text style={{ fontSize: 13 }}>🪙</Text>
+            <Text style={gs.refCurrencyText}>{hud.coins}</Text>
+          </View>
+          <View style={gs.refCurrencyPill}>
+            <Text style={{ fontSize: 13 }}>💎</Text>
+            <Text style={gs.refCurrencyText}>{hud.gems}</Text>
+          </View>
+          <View style={gs.refCurrencyPill}>
+            <Text style={{ fontSize: 13 }}>🧪</Text>
+            <Text style={gs.refCurrencyText}>{hud.potionsLeft}</Text>
+          </View>
+          <Pressable
+            hitSlop={8}
+            style={({ pressed }) => [gs.refPauseBtn, pressed && { opacity: 0.7 }]}
+            onPress={() => {
+              state.running = false;
+              setScreen('PAUSE');
+            }}>
+            <Text style={gs.refPauseText}>II</Text>
+          </Pressable>
+        </View>
+      </View>
+
+      {/* OVERLAY TOASTS / BOSS INTROS */}
+      <View pointerEvents="box-none" style={gs.overlayCol}>
+        {hud.bossDefeatedText ? (
+          <View style={[gs.banner, { backgroundColor: 'rgba(30,90,60,0.95)' }]}>
+            <Text numberOfLines={1} style={gs.bannerText}>{hud.bossDefeatedText}</Text>
+          </View>
+        ) : hud.bossWarningText ? (
+          <View style={[gs.banner, { backgroundColor: 'rgba(138,14,38,0.95)' }]}>
+            <Text numberOfLines={1} style={gs.bannerText}>{hud.bossWarningText}</Text>
+          </View>
+        ) : null}
+
+        {hud.bossIntroActive && (
+          <View style={gs.bossIntro}>
+            <MonsterArt monsterId={stageBossMonster.id} size={54} />
+            <View style={{ flex: 1 }}>
+              <Text numberOfLines={1} style={gs.bossIntroTitle}>
+                👑 {stageBossMonster.name.toUpperCase()}
+              </Text>
+              <Text numberOfLines={2} style={gs.bossIntroDesc}>
+                {stageBossMonster.bossIntroText}
+              </Text>
+            </View>
+            <Pressable
+              style={gs.fightBtn}
+              onPress={() => {
+                state.bossIntroTimer = 0;
+              }}>
+              <Text style={gs.fightText}>FIGHT!</Text>
+            </Pressable>
+          </View>
+        )}
+
+        {hud.toast && !hud.bossIntroActive ? (
+          <View style={gs.toast}>
+            <Text numberOfLines={2} style={gs.toastText}>{hud.toast}</Text>
+          </View>
+        ) : null}
+      </View>
+
+      {/* ===== BOTTOM CONTROLS OVERLAY (STRICT HORIZONTAL REFERENCE) ===== */}
+      {renderReferenceControls()}
+    </View>
   );
 }
 
@@ -2126,13 +2188,25 @@ const GameBtn: React.FC<{
   size: number;
   icon: string;
   label?: string;
-  color?: string;
+  badge?: string;
+  borderColor?: string;
   fill?: string;
   active?: boolean;
   dim?: boolean;
   onPressIn?: () => void;
   onPressOut?: () => void;
-}> = ({ size, icon, label, color = '#9c89b8', fill, active, dim, onPressIn, onPressOut }) => (
+}> = ({
+  size,
+  icon,
+  label,
+  badge,
+  borderColor = '#3a4a5c',
+  fill,
+  active,
+  dim,
+  onPressIn,
+  onPressOut,
+}) => (
   <Pressable
     hitSlop={4}
     onPressIn={onPressIn}
@@ -2143,21 +2217,247 @@ const GameBtn: React.FC<{
         width: size,
         height: size,
         borderRadius: size / 2,
-        borderColor: color,
-        backgroundColor: fill || 'rgba(24,18,36,0.9)',
+        borderColor: borderColor,
+        backgroundColor: fill || 'rgba(18,14,28,0.92)',
       },
-      active && { backgroundColor: 'rgba(56,228,174,0.28)' },
+      active && { backgroundColor: 'rgba(56,228,174,0.35)', borderColor: '#38e4ae' },
       dim && { opacity: 0.5 },
-      pressed && { transform: [{ scale: 0.92 }], backgroundColor: 'rgba(255,209,82,0.28)' },
+      pressed && { transform: [{ scale: 0.92 }], backgroundColor: 'rgba(255,209,82,0.3)' },
     ]}>
-    <Text style={{ fontSize: size * 0.4, color: '#fff', fontWeight: '900' }}>{icon}</Text>
+    <Text style={{ fontSize: size * 0.42, color: '#fff', fontWeight: '900' }}>{icon}</Text>
     {label ? (
-      <Text style={[gs.btnLabel, { fontSize: Math.max(7, size * 0.16) }]}>{label}</Text>
+      <Text style={[gs.btnLabel, { fontSize: Math.max(7, size * 0.17) }]}>{label}</Text>
+    ) : null}
+    {badge ? (
+      <View style={gs.btnBadge}>
+        <Text style={gs.btnBadgeText}>{badge}</Text>
+      </View>
     ) : null}
   </Pressable>
 );
 
 const gs = StyleSheet.create({
+  fullscreenRoot: {
+    flex: 1,
+    backgroundColor: '#0b0914',
+    overflow: 'hidden',
+  },
+  referenceHudRow: {
+    position: 'absolute',
+    top: 8,
+    left: 12,
+    right: 12,
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+  },
+  refHudLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  refPortraitCircle: {
+    backgroundColor: '#1b263b',
+    borderWidth: 2.5,
+    borderColor: '#ffd152',
+    alignItems: 'center',
+    justifyContent: 'center',
+    overflow: 'hidden',
+  },
+  refBadgeHeart: {
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    backgroundColor: '#e63946',
+    borderWidth: 1.5,
+    borderColor: '#ffd152',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  refBadgeStamina: {
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    backgroundColor: '#2b9348',
+    borderWidth: 1.5,
+    borderColor: '#ffd152',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  refBarTrack: {
+    height: 14,
+    backgroundColor: 'rgba(15,10,24,0.85)',
+    borderWidth: 1.5,
+    borderColor: '#ffd152',
+    borderRadius: 7,
+    overflow: 'hidden',
+    justifyContent: 'center',
+  },
+  refBarFill: {
+    position: 'absolute',
+    left: 0,
+    top: 0,
+    bottom: 0,
+  },
+  refBarNumText: {
+    color: '#ffffff',
+    fontSize: 9.5,
+    fontWeight: '900',
+    textAlign: 'center',
+    textShadowColor: 'rgba(0,0,0,0.8)',
+    textShadowOffset: { width: 1, height: 1 },
+    textShadowRadius: 2,
+  },
+  refStaFullText: {
+    color: '#38e4ae',
+    fontSize: 9,
+    fontWeight: '900',
+    marginLeft: 24,
+  },
+  refHudCenter: {
+    alignItems: 'center',
+    gap: 4,
+  },
+  refGoldBanner: {
+    backgroundColor: 'rgba(18,12,30,0.92)',
+    borderWidth: 2,
+    borderColor: '#ffd152',
+    borderRadius: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 3,
+    alignItems: 'center',
+  },
+  refGoldBannerTitle: {
+    color: '#ffd152',
+    fontWeight: '900',
+    fontSize: 12.5,
+  },
+  refGoldBannerSub: {
+    color: '#ffffff',
+    fontWeight: '800',
+    fontSize: 11,
+  },
+  refWaveSubPill: {
+    backgroundColor: 'rgba(35,25,50,0.85)',
+    borderRadius: 8,
+    paddingHorizontal: 8,
+    paddingVertical: 1,
+    marginTop: 2,
+  },
+  refWaveSubText: {
+    color: '#ffd152',
+    fontWeight: '800',
+    fontSize: 9.5,
+  },
+  refTargetRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: 'rgba(18,12,30,0.9)',
+    borderWidth: 1.5,
+    borderColor: '#ffd152',
+    borderRadius: 14,
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    minWidth: 180,
+    maxWidth: 240,
+  },
+  refTargetAvatar: {
+    width: 26,
+    height: 26,
+    borderRadius: 13,
+    borderWidth: 1.5,
+    borderColor: '#ffd152',
+    backgroundColor: '#1b263b',
+    overflow: 'hidden',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  refTargetName: {
+    color: '#ffffff',
+    fontWeight: '900',
+    fontSize: 10.5,
+  },
+  refTargetHpTrack: {
+    height: 10,
+    backgroundColor: 'rgba(0,0,0,0.7)',
+    borderRadius: 5,
+    borderWidth: 1,
+    borderColor: '#ffd152',
+    overflow: 'hidden',
+    justifyContent: 'center',
+  },
+  refHudRight: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  refCurrencyPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: 'rgba(18,12,30,0.92)',
+    borderWidth: 1.5,
+    borderColor: '#ffd152',
+    borderRadius: 14,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+  },
+  refCurrencyText: {
+    color: '#ffd152',
+    fontWeight: '900',
+    fontSize: 11,
+  },
+  refPauseBtn: {
+    width: 34,
+    height: 34,
+    borderRadius: 8,
+    backgroundColor: 'rgba(18,12,30,0.92)',
+    borderWidth: 2,
+    borderColor: '#ffd152',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  refPauseText: {
+    color: '#ffd152',
+    fontWeight: '900',
+    fontSize: 13,
+  },
+  controlsOverlay: {
+    position: 'absolute',
+    left: 14,
+    right: 14,
+    bottom: 12,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-end',
+  },
+  dpadRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  actionRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  btnBadge: {
+    position: 'absolute',
+    right: -2,
+    bottom: -2,
+    backgroundColor: '#e63946',
+    borderWidth: 1,
+    borderColor: '#ffd152',
+    borderRadius: 7,
+    paddingHorizontal: 4,
+    paddingVertical: 0.5,
+  },
+  btnBadgeText: {
+    color: '#ffffff',
+    fontSize: 8.5,
+    fontWeight: '900',
+  },
   root: { flex: 1, paddingHorizontal: 6, paddingVertical: 4, gap: 4 },
   hudSection: { gap: 4, justifyContent: 'center' },
   hudRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 6 },
@@ -2269,10 +2569,6 @@ const gs = StyleSheet.create({
   controlsSection: {
     flex: 22, minHeight: 112, flexDirection: 'row', justifyContent: 'space-between',
     alignItems: 'center', paddingBottom: 6,
-  },
-  controlsOverlay: {
-    position: 'absolute', left: 0, right: 0, bottom: 8,
-    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-end',
   },
   btn: { borderWidth: 2.5, alignItems: 'center', justifyContent: 'center' },
   btnLabel: { color: '#ffd152', fontWeight: '900', marginTop: -2 },

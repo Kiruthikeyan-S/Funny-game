@@ -1,6 +1,8 @@
-import React from 'react';
+import React, { useState } from 'react';
+import { Image, View } from 'react-native';
 import Svg, { Circle, Path, Polygon, Rect } from 'react-native-svg';
 import { MonsterId } from '../constants/gameData';
+import { MONSTER_SPRITES, WARRIOR_SPRITE } from '../constants/gameAssets';
 
 interface MonsterArtProps {
   monsterId: MonsterId;
@@ -8,6 +10,24 @@ interface MonsterArtProps {
 }
 
 export const MonsterArt: React.FC<MonsterArtProps> = ({ monsterId, size = 72 }) => {
+  const [loadError, setLoadError] = useState(false);
+  const spriteSrc = MONSTER_SPRITES[monsterId];
+
+  if (spriteSrc && !loadError) {
+    return (
+      <Image
+        source={spriteSrc}
+        resizeMode="contain"
+        style={{ width: size, height: size }}
+        onError={() => setLoadError(true)}
+      />
+    );
+  }
+
+  return <MonsterArtSvg monsterId={monsterId} size={size} />;
+};
+
+export const MonsterArtSvg: React.FC<MonsterArtProps> = ({ monsterId, size = 72 }) => {
   switch (monsterId) {
     case 'forest_goblin':
       return (
@@ -293,36 +313,102 @@ export const WarriorArt: React.FC<{
   heavyAttacking = false,
   blocking = false,
   defeated = false,
-}) => (
-  <Svg
-    width={size}
-    height={size}
-    viewBox="0 0 32 32"
-    style={defeated ? { transform: [{ rotate: '-75deg' }] } : undefined}>
-    {/* Flowing Crimson Cape */}
-    <Polygon points="10,12 3,26 12,26 14,14" fill="#c9184a" />
-    {/* Brown Hero Hair & Face */}
-    <Rect x="11" y="4" width="9" height="5" fill="#582f0e" />
-    <Rect x="12" y="8" width="8" height="6" fill="#f3d5b5" />
-    <Rect x="17" y="10" width="2" height="2" fill={defeated ? '#6c757d' : '#1d3557'} />
-    {/* Silver/Blue Paladin Armor */}
-    <Rect x="10" y="14" width="11" height="10" fill="#3a506b" />
-    <Rect x="12" y="15" width="7" height="8" fill="#adb5bd" />
-    <Rect x="14" y="17" width="3" height="3" fill="#ffd152" />
-    {/* Boots */}
-    <Rect x="11" y="24" width="4" height="6" fill="#495057" />
-    <Rect x="17" y="24" width="4" height="6" fill="#343a40" />
-    {/* Shield or Glowing Sword */}
-    {blocking ? (
-      <Rect x="20" y="11" width="5" height="14" fill="#38e4ae" stroke="#ffd152" strokeWidth="1" />
-    ) : null}
-    <Rect x="20" y="16" width="3" height="3" fill="#ffd152" />
-    {heavyAttacking ? (
-      <Path d="M 20 3 L 32 14 L 20 26 Z" fill="#ff70a6" stroke="#ffd152" strokeWidth="1" />
-    ) : attacking ? (
-      <Path d="M 22 8 L 31 14 L 22 22 Z" fill="#ffd152" />
-    ) : (
-      <Rect x="22" y="7" width="3" height="12" fill="#e9ecef" />
-    )}
-  </Svg>
-);
+}) => {
+  const [loadError, setLoadError] = useState(false);
+
+  if (!loadError && WARRIOR_SPRITE) {
+    return (
+      <View
+        style={[
+          { width: size, height: size, justifyContent: 'center', alignItems: 'center' },
+          defeated && { transform: [{ rotate: '-75deg' }] },
+        ]}>
+        <Image
+          source={WARRIOR_SPRITE}
+          resizeMode="contain"
+          style={{ width: size, height: size }}
+          onError={() => setLoadError(true)}
+        />
+        {blocking && (
+          <View
+            style={{
+              position: 'absolute',
+              right: 2,
+              top: size * 0.2,
+              width: size * 0.35,
+              height: size * 0.6,
+              borderRadius: 6,
+              borderWidth: 2,
+              borderColor: '#38e4ae',
+              backgroundColor: 'rgba(56,228,174,0.3)',
+            }}
+          />
+        )}
+        {heavyAttacking && (
+          <View
+            style={{
+              position: 'absolute',
+              right: -size * 0.2,
+              top: size * 0.1,
+              width: size * 0.6,
+              height: size * 0.8,
+              borderRadius: size * 0.3,
+              borderWidth: 3,
+              borderColor: '#ff70a6',
+              backgroundColor: 'rgba(255,112,166,0.35)',
+            }}
+          />
+        )}
+        {attacking && !heavyAttacking && (
+          <View
+            style={{
+              position: 'absolute',
+              right: -size * 0.15,
+              top: size * 0.2,
+              width: size * 0.45,
+              height: size * 0.6,
+              borderRadius: size * 0.25,
+              borderWidth: 2,
+              borderColor: '#ffd152',
+              backgroundColor: 'rgba(255,209,82,0.35)',
+            }}
+          />
+        )}
+      </View>
+    );
+  }
+
+  return (
+    <Svg
+      width={size}
+      height={size}
+      viewBox="0 0 32 32"
+      style={defeated ? { transform: [{ rotate: '-75deg' }] } : undefined}>
+      {/* Flowing Crimson Cape */}
+      <Polygon points="10,12 3,26 12,26 14,14" fill="#c9184a" />
+      {/* Brown Hero Hair & Face */}
+      <Rect x="11" y="4" width="9" height="5" fill="#582f0e" />
+      <Rect x="12" y="8" width="8" height="6" fill="#f3d5b5" />
+      <Rect x="17" y="10" width="2" height="2" fill={defeated ? '#6c757d' : '#1d3557'} />
+      {/* Silver/Blue Paladin Armor */}
+      <Rect x="10" y="14" width="11" height="10" fill="#3a506b" />
+      <Rect x="12" y="15" width="7" height="8" fill="#adb5bd" />
+      <Rect x="14" y="17" width="3" height="3" fill="#ffd152" />
+      {/* Boots */}
+      <Rect x="11" y="24" width="4" height="6" fill="#495057" />
+      <Rect x="17" y="24" width="4" height="6" fill="#343a40" />
+      {/* Shield or Glowing Sword */}
+      {blocking ? (
+        <Rect x="20" y="11" width="5" height="14" fill="#38e4ae" stroke="#ffd152" strokeWidth="1" />
+      ) : null}
+      <Rect x="20" y="16" width="3" height="3" fill="#ffd152" />
+      {heavyAttacking ? (
+        <Path d="M 20 3 L 32 14 L 20 26 Z" fill="#ff70a6" stroke="#ffd152" strokeWidth="1" />
+      ) : attacking ? (
+        <Path d="M 22 8 L 31 14 L 22 22 Z" fill="#ffd152" />
+      ) : (
+        <Rect x="22" y="7" width="3" height="12" fill="#e9ecef" />
+      )}
+    </Svg>
+  );
+};
