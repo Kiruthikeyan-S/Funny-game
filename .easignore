@@ -1,0 +1,6 @@
+android/
+ios/
+.git/
+node_modules/
+dist/
+web-build/
