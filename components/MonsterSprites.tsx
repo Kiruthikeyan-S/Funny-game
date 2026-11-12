@@ -2,16 +2,40 @@ import React, { useState } from 'react';
 import { Image, View } from 'react-native';
 import Svg, { Circle, Path, Polygon, Rect } from 'react-native-svg';
 import { MonsterId } from '../constants/gameData';
-import { MONSTER_SPRITES, WARRIOR_SPRITE } from '../constants/gameAssets';
+import {
+  MONSTER_ANIMATIONS,
+  MONSTER_SPRITES,
+  WARRIOR_ANIMATIONS,
+  WARRIOR_SPRITE,
+} from '../constants/gameAssets';
 
 interface MonsterArtProps {
   monsterId: MonsterId;
   size?: number;
+  aiState?: string;
+  isFlying?: boolean;
 }
 
-export const MonsterArt: React.FC<MonsterArtProps> = ({ monsterId, size = 72 }) => {
+export const MonsterArt: React.FC<MonsterArtProps> = ({
+  monsterId,
+  size = 72,
+  aiState,
+  isFlying,
+}) => {
   const [loadError, setLoadError] = useState(false);
-  const spriteSrc = MONSTER_SPRITES[monsterId];
+
+  // Pick animated or state-based frame if available
+  let spriteSrc = MONSTER_SPRITES[monsterId];
+  const anims = MONSTER_ANIMATIONS[monsterId];
+  if (anims) {
+    if (aiState === 'DEAD' && anims.dead) spriteSrc = anims.dead;
+    else if (aiState === 'HURT' && anims.hurt) spriteSrc = anims.hurt;
+    else if ((aiState === 'ATTACK' || aiState === 'PREPARE_ATTACK') && anims.attack)
+      spriteSrc = anims.attack;
+    else if (isFlying && anims.fly) spriteSrc = anims.fly;
+    else if (aiState === 'CHASE' && anims.run) spriteSrc = anims.run;
+    else if (anims.idle) spriteSrc = anims.idle;
+  }
 
   if (spriteSrc && !loadError) {
     return (
@@ -307,24 +331,34 @@ export const WarriorArt: React.FC<{
   heavyAttacking?: boolean;
   blocking?: boolean;
   defeated?: boolean;
+  hurt?: boolean;
+  running?: boolean;
 }> = ({
   size = 56,
   attacking = false,
   heavyAttacking = false,
   blocking = false,
   defeated = false,
+  hurt = false,
+  running = false,
 }) => {
   const [loadError, setLoadError] = useState(false);
 
-  if (!loadError && WARRIOR_SPRITE) {
+  // Select contextual animation frame
+  let warriorFrame = WARRIOR_ANIMATIONS.idle;
+  if (defeated) warriorFrame = WARRIOR_ANIMATIONS.dead;
+  else if (hurt) warriorFrame = WARRIOR_ANIMATIONS.hurt;
+  else if (attacking || heavyAttacking) warriorFrame = WARRIOR_ANIMATIONS.attack;
+  else if (running) warriorFrame = WARRIOR_ANIMATIONS.run;
+
+  if (!loadError && warriorFrame) {
     return (
       <View
         style={[
           { width: size, height: size, justifyContent: 'center', alignItems: 'center' },
-          defeated && { transform: [{ rotate: '-75deg' }] },
         ]}>
         <Image
-          source={WARRIOR_SPRITE}
+          source={warriorFrame}
           resizeMode="contain"
           style={{ width: size, height: size }}
           onError={() => setLoadError(true)}
@@ -334,13 +368,13 @@ export const WarriorArt: React.FC<{
             style={{
               position: 'absolute',
               right: 2,
-              top: size * 0.2,
-              width: size * 0.35,
-              height: size * 0.6,
+              top: size * 0.15,
+              width: size * 0.4,
+              height: size * 0.65,
               borderRadius: 6,
-              borderWidth: 2,
+              borderWidth: 2.5,
               borderColor: '#38e4ae',
-              backgroundColor: 'rgba(56,228,174,0.3)',
+              backgroundColor: 'rgba(56,228,174,0.35)',
             }}
           />
         )}
@@ -348,11 +382,11 @@ export const WarriorArt: React.FC<{
           <View
             style={{
               position: 'absolute',
-              right: -size * 0.2,
-              top: size * 0.1,
-              width: size * 0.6,
-              height: size * 0.8,
-              borderRadius: size * 0.3,
+              right: -size * 0.25,
+              top: size * 0.05,
+              width: size * 0.7,
+              height: size * 0.9,
+              borderRadius: size * 0.35,
               borderWidth: 3,
               borderColor: '#ff70a6',
               backgroundColor: 'rgba(255,112,166,0.35)',
@@ -363,10 +397,10 @@ export const WarriorArt: React.FC<{
           <View
             style={{
               position: 'absolute',
-              right: -size * 0.15,
-              top: size * 0.2,
-              width: size * 0.45,
-              height: size * 0.6,
+              right: -size * 0.18,
+              top: size * 0.15,
+              width: size * 0.5,
+              height: size * 0.65,
               borderRadius: size * 0.25,
               borderWidth: 2,
               borderColor: '#ffd152',

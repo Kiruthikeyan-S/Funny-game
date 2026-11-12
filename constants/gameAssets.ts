@@ -25,6 +25,41 @@ export const MONSTER_SPRITES: Record<MonsterId, ImageSourcePropType> = {
   witch_queen: require('../assets/monsters/sprites/witch_queen.png'),
 };
 
+export const MONSTER_ANIMATIONS: Partial<
+  Record<
+    MonsterId,
+    Partial<Record<'idle' | 'attack' | 'hurt' | 'dead' | 'fly' | 'run', ImageSourcePropType>>
+  >
+> = {
+  cursed_dragon: {
+    idle: require('../assets/monsters/sprites/cursed_dragon.png'),
+    fly: require('../assets/monsters/sprites/cursed_dragon_fly.png'),
+    attack: require('../assets/monsters/sprites/cursed_dragon_attack.png'),
+    hurt: require('../assets/monsters/sprites/cursed_dragon_hurt.png'),
+  },
+  witch_queen: {
+    idle: require('../assets/monsters/sprites/witch_queen.png'),
+    attack: require('../assets/monsters/sprites/witch_queen_attack.png'),
+  },
+  demon_knight: {
+    idle: require('../assets/monsters/sprites/demon_knight.png'),
+    run: require('../assets/monsters/sprites/demon_knight_run.png'),
+    attack: require('../assets/monsters/sprites/demon_knight_attack.png'),
+    hurt: require('../assets/monsters/sprites/demon_knight_hurt.png'),
+    dead: require('../assets/monsters/sprites/demon_knight_dead.png'),
+  },
+  forest_goblin: {
+    idle: require('../assets/monsters/sprites/forest_goblin.png'),
+    attack: require('../assets/monsters/sprites/forest_goblin_attack.png'),
+    hurt: require('../assets/monsters/sprites/forest_goblin_hurt.png'),
+    dead: require('../assets/monsters/sprites/forest_goblin_dead.png'),
+  },
+  dark_witch: {
+    idle: require('../assets/monsters/sprites/dark_witch.png'),
+    attack: require('../assets/monsters/sprites/dark_witch_attack.png'),
+  },
+};
+
 export const MONSTER_CARDS: Record<MonsterId, ImageSourcePropType> = {
   forest_goblin: require('../assets/monsters/cards/forest_goblin.jpg'),
   shadow_wolf: require('../assets/monsters/cards/shadow_wolf.jpg'),
@@ -42,3 +77,15 @@ export const MONSTER_CARDS: Record<MonsterId, ImageSourcePropType> = {
 };
 
 export const WARRIOR_SPRITE: ImageSourcePropType = require('../assets/warrior/warrior.png');
+
+export const WARRIOR_ANIMATIONS: Record<
+  'idle' | 'walk' | 'run' | 'attack' | 'hurt' | 'dead',
+  ImageSourcePropType
+> = {
+  idle: require('../assets/warrior/warrior_idle.png'),
+  walk: require('../assets/warrior/warrior_walk.png'),
+  run: require('../assets/warrior/warrior_run.png'),
+  attack: require('../assets/warrior/warrior_attack.png'),
+  hurt: require('../assets/warrior/warrior_hurt.png'),
+  dead: require('../assets/warrior/warrior_dead.png'),
+};

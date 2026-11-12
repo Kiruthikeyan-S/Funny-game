@@ -1931,7 +1931,12 @@ export default function CursedKingdomGame() {
                     height: art,
                     transform: [{ scaleX: e.facing < 0 ? 1 : -1 }],
                   }}>
-                  <MonsterArt monsterId={e.monsterId} size={art} />
+                  <MonsterArt
+                    monsterId={e.monsterId}
+                    size={art}
+                    aiState={e.aiState}
+                    isFlying={e.isFlying}
+                  />
                 </View>
               </View>
             );
@@ -1961,6 +1966,9 @@ export default function CursedKingdomGame() {
                 attacking={p.attackTimer > 0}
                 heavyAttacking={p.heavyAttackTimer > 0}
                 blocking={p.blocking}
+                defeated={p.hp <= 0 || state.outcome === 'DEFEAT'}
+                hurt={p.invulnTimer > 15}
+                running={Math.abs(p.vx) > 0.5}
               />
             </View>
           </View>
@@ -2537,7 +2545,7 @@ const gs = StyleSheet.create({
     borderWidth: 5, borderColor: 'rgba(230,57,70,0.5)',
   },
   overlayCol: {
-    position: 'absolute', top: 6, left: 8, right: 8,
+    position: 'absolute', top: 86, left: 14, right: 14,
     alignItems: 'center', gap: 4,
   },
   banner: {

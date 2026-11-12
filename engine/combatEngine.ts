@@ -86,6 +86,8 @@ export interface ActiveEnemy {
   guardBroken: boolean;
   escapeThreshold: number;
   telegraphAbilityName: string;
+  isFlying?: boolean;
+  flyAltitudeTimer?: number;
 }
 
 export interface CollectibleItem {
@@ -697,14 +699,15 @@ function executeMonsterAttackPattern(state: EngineState, e: ActiveEnemy): void {
     case 'wyvern_aerial':
     case 'dragon_inferno':
       e.x += dir * (e.moveSpeed * 2.1);
-      e.y = GROUND_Y - e.h - 6;
+      e.y = GROUND_Y - e.h - (e.isFlying ? 60 : 6);
       if (!e.hasDealtDamageThisAttack && e.stateTimer === Math.floor(e.attackFrames / 2)) {
+        e.hasDealtDamageThisAttack = true;
         state.projectiles.push({
           id: nextUid('proj'),
           x: e.x + e.w / 2,
           y: e.y + e.h * 0.5,
           vx: dir * 5.2,
-          vy: 0,
+          vy: e.isFlying ? 2.2 : 0,
           radius: 9,
           damage: e.attack,
           color: e.attackPattern === 'wyvern_aerial' ? '#90e0ef' : '#f77f00',
@@ -716,7 +719,8 @@ function executeMonsterAttackPattern(state: EngineState, e: ActiveEnemy): void {
 
     case 'beast_tri_storm':
       e.x += dir * (e.moveSpeed * 1.65);
-      if (!e.hasDealtDamageThisAttack && e.bossPhase === 2) {
+      if (!e.hasDealtDamageThisAttack && e.bossPhase === 2 && e.stateTimer === Math.floor(e.attackFrames / 2)) {
+        e.hasDealtDamageThisAttack = true;
         state.projectiles.push({
           id: nextUid('proj'),
           x: e.x + e.w / 2,
@@ -734,7 +738,8 @@ function executeMonsterAttackPattern(state: EngineState, e: ActiveEnemy): void {
 
     case 'demon_shockwave':
       e.x += dir * (e.moveSpeed * 1.35);
-      if (!e.hasDealtDamageThisAttack) {
+      if (!e.hasDealtDamageThisAttack && e.stateTimer === Math.floor(e.attackFrames / 2)) {
+        e.hasDealtDamageThisAttack = true;
         state.projectiles.push({
           id: nextUid('proj'),
           x: e.x + e.w / 2,
@@ -950,7 +955,33 @@ export function stepEngineFrame(state: EngineState, viewportWidth = 640): void {
     if (e.attackCooldown > 0) e.attackCooldown -= 1;
 
     // Altitude return for flying Wyverns / Dragons or gravity for ground monsters
-    if (cfg.isFlying && e.aiState !== 'ATTACK') {
+    if (e.monsterId === 'cursed_dragon') {
+      if (e.flyAltitudeTimer === undefined) e.flyAltitudeTimer = 180;
+      e.flyAltitudeTimer -= 1;
+      if (e.flyAltitudeTimer <= 0) {
+        e.isFlying = !e.isFlying;
+        e.flyAltitudeTimer = e.isFlying ? 120 : 160;
+        if (e.isFlying) {
+          addDamageIndicator(state, e.x + e.w / 2, e.y - 12, 'DRAGON TAKES OFF! 🦅', '#ffd152');
+        } else {
+          addDamageIndicator(state, e.x + e.w / 2, GROUND_Y - 14, 'DRAGON LANDS! 💥', '#ff70a6');
+        }
+      }
+      if (e.isFlying) {
+        const targetFlyY = GROUND_Y - e.h - 75;
+        e.y += (targetFlyY - e.y) * 0.1;
+      } else if (e.y + e.h < GROUND_Y) {
+        e.vy += 0.48;
+        e.y = Math.min(GROUND_Y - e.h, e.y + e.vy);
+      } else {
+        e.vy = 0;
+      }
+    } else if (e.monsterId === 'witch_queen' || e.monsterId === 'dark_witch') {
+      // Floating hover with magical bobbing
+      const hoverBase = GROUND_Y - e.h - 14;
+      e.y = hoverBase + Math.sin((state.level.length - e.x) * 0.05 + e.stateTimer * 0.1) * 6;
+      e.vy = 0;
+    } else if (cfg.isFlying && e.aiState !== 'ATTACK') {
       e.y += (128 - e.y) * 0.12;
     } else if (e.y + e.h < GROUND_Y) {
       e.vy += 0.48;
