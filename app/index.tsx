@@ -21,18 +21,27 @@ import {
   MonsterConfig,
   MonsterId,
   STORY_CHAPTERS,
+  UpgradeCategory,
+  WARRIOR_UPGRADES,
   WORLDS_DATA,
   WorldInfo,
 } from '../constants/gameData';
 import {
   ActiveEnemy,
+  computePlayerDefense,
+  computePlayerMaxHp,
+  computePlayerSwordDamage,
   createInitialEngineState,
+  DEFAULT_UPGRADES,
   EngineState,
   GROUND_Y,
   playerDodge,
+  playerHeavyAttack,
   playerJump,
   playerStoneSkill,
   playerSwordAttack,
+  playerUsePotion,
+  PlayerUpgrades,
   STAGE_HEIGHT,
   stepEngineFrame,
 } from '../engine/combatEngine';
@@ -43,21 +52,28 @@ type ScreenState =
   | 'SELECT_WORLD'
   | 'LEVEL_SELECT'
   | 'LEVEL_MONSTER_PLAN'
+  | 'ARMORY'
   | 'MONSTER_GALLERY'
   | 'MONSTER_DETAIL'
   | 'GAMEPLAY'
   | 'PAUSE'
   | 'SETTINGS'
   | 'LEVEL_COMPLETE'
+  | 'GAME_OVER'
   | 'ENDING';
 
 interface SaveData {
   unlockedLevel: number;
   coins: number;
   gems: number;
+  potions: number;
+  upgrades: PlayerUpgrades;
+  defeatedMonsters: MonsterId[];
   stars: Record<number, number>;
   musicVol: number;
   sfxVol: number;
+  musicEnabled: boolean;
+  sfxEnabled: boolean;
   vibration: boolean;
   screenShake: boolean;
   fullscreen: boolean;
@@ -65,11 +81,16 @@ interface SaveData {
 
 const DEFAULT_SAVE: SaveData = {
   unlockedLevel: 1,
-  coins: 230,
+  coins: 250,
   gems: 3,
-  stars: { 1: 3, 2: 2 },
+  potions: 3,
+  upgrades: { ...DEFAULT_UPGRADES },
+  defeatedMonsters: [],
+  stars: {},
   musicVol: 80,
   sfxVol: 70,
+  musicEnabled: true,
+  sfxEnabled: true,
   vibration: true,
   screenShake: true,
   fullscreen: false,
@@ -83,11 +104,12 @@ export default function CursedKingdomGame() {
   const [storyStep, setStoryStep] = useState(0);
   const [selectedWorldId, setSelectedWorldId] = useState<number>(1);
   const [selectedMonster, setSelectedMonster] = useState<MonsterConfig>(
-    MONSTERS_DATA.frost_guardian
+    MONSTERS_DATA.tree_guardian
   );
   const [settingsTab, setSettingsTab] = useState<
-    'General' | 'Controls' | 'Audio' | 'Graphics' | 'Language'
+    'General' | 'Controls' | 'Audio' | 'Graphics'
   >('General');
+  const [armoryNotice, setArmoryNotice] = useState<string>('');
 
   const [currentLevel, setCurrentLevel] = useState<LevelInfo>(LEVELS_DATA[0]);
   const [currentWorld, setCurrentWorld] = useState<WorldInfo>(WORLDS_DATA[0]);
@@ -100,19 +122,25 @@ export default function CursedKingdomGame() {
     stamina: 100,
     maxStamina: 100,
     skillCooldownFrames: 0,
-    coins: 230,
+    potionsLeft: 3,
+    poisoned: false,
+    rooted: false,
+    lowHealth: false,
+    coins: 250,
     gems: 3,
     currentWave: 1,
     totalWaves: 3,
     remainingEnemies: 2,
-    targetEnemyName: 'Forest Slime',
-    targetEnemyId: 'forest_slime' as MonsterId,
-    targetEnemyHp: 115,
-    targetEnemyMaxHp: 115,
+    targetEnemyName: 'Forest Goblin',
+    targetEnemyId: 'forest_goblin' as MonsterId,
+    targetEnemyHp: 100,
+    targetEnemyMaxHp: 100,
     targetEnemyIsBoss: false,
     targetBossPhase: 1 as 1 | 2,
     targetHasShield: false,
     bossWarningText: '',
+    bossIntroActive: false,
+    bossDefeatedText: '',
     dialogueSpeaker: '',
     dialogueText: '',
     toast: '',
@@ -124,14 +152,24 @@ export default function CursedKingdomGame() {
   });
 
   const [, setTick] = useState(0);
-
   const engineRef = useRef<EngineState>(createInitialEngineState(1));
 
   useEffect(() => {
     AsyncStorage.getItem(STORAGE_KEY)
       .then((raw) => {
         if (raw) {
-          setSave({ ...DEFAULT_SAVE, ...JSON.parse(raw) });
+          const parsed = JSON.parse(raw);
+          setSave({
+            ...DEFAULT_SAVE,
+            ...parsed,
+            upgrades: {
+              ...DEFAULT_UPGRADES,
+              ...(parsed.upgrades || {}),
+            },
+            defeatedMonsters: Array.isArray(parsed.defeatedMonsters)
+              ? parsed.defeatedMonsters
+              : [],
+          });
         }
       })
       .catch(() => {});
@@ -155,7 +193,11 @@ export default function CursedKingdomGame() {
 
   // Start any of the 13 Levels using the unified Combat & Wave Engine
   const launchLevel = (levelNumber: number) => {
-    const state = createInitialEngineState(levelNumber);
+    const state = createInitialEngineState(
+      levelNumber,
+      save.upgrades || DEFAULT_UPGRADES,
+      save.potions ?? 3
+    );
     engineRef.current = state;
 
     const lvl = state.level;
@@ -164,6 +206,7 @@ export default function CursedKingdomGame() {
 
     setCurrentLevel(lvl);
     setCurrentWorld(world);
+    setSelectedWorldId(world.id);
 
     setHud({
       hearts: 4,
@@ -173,6 +216,10 @@ export default function CursedKingdomGame() {
       stamina: state.player.stamina,
       maxStamina: state.player.maxStamina,
       skillCooldownFrames: 0,
+      potionsLeft: state.potionsLeft,
+      poisoned: false,
+      rooted: false,
+      lowHealth: false,
       coins: save.coins,
       gems: save.gems,
       currentWave: state.currentWave,
@@ -186,6 +233,8 @@ export default function CursedKingdomGame() {
       targetBossPhase: firstEnemy ? firstEnemy.bossPhase : 1,
       targetHasShield: Boolean(firstEnemy?.shieldActive),
       bossWarningText: '',
+      bossIntroActive: false,
+      bossDefeatedText: '',
       dialogueSpeaker: state.dialogueSpeaker,
       dialogueText: state.dialogueText,
       toast: state.toastText,
@@ -198,6 +247,44 @@ export default function CursedKingdomGame() {
 
     setScreen('GAMEPLAY');
   };
+
+  // PC Keyboard Support (Web / Desktop testing)
+  useEffect(() => {
+    if (Platform.OS !== 'web' || screen !== 'GAMEPLAY') return;
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const state = engineRef.current;
+      const key = e.key.toLowerCase();
+      if (key === 'a' || e.key === 'ArrowLeft') state.controls.left = true;
+      else if (key === 'd' || e.key === 'ArrowRight') state.controls.right = true;
+      else if (key === 'w' || e.key === 'ArrowUp' || e.key === ' ') playerJump(state);
+      else if (key === 'j') playerSwordAttack(state);
+      else if (key === 'h') playerHeavyAttack(state);
+      else if (key === 'k') state.controls.block = true;
+      else if (key === 'l' || e.key === 'Shift') playerDodge(state);
+      else if (key === 'u') playerStoneSkill(state);
+      else if (key === 'i' || key === 'q') playerUsePotion(state);
+      else if (e.key === 'Escape' || key === 'p') {
+        state.running = false;
+        setScreen('PAUSE');
+      }
+    };
+
+    const handleKeyUp = (e: KeyboardEvent) => {
+      const state = engineRef.current;
+      const key = e.key.toLowerCase();
+      if (key === 'a' || e.key === 'ArrowLeft') state.controls.left = false;
+      else if (key === 'd' || e.key === 'ArrowRight') state.controls.right = false;
+      else if (key === 'k') state.controls.block = false;
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    window.addEventListener('keyup', handleKeyUp);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('keyup', handleKeyUp);
+    };
+  }, [screen]);
 
   // 60FPS Real-Time Gameplay Loop
   useEffect(() => {
@@ -220,7 +307,6 @@ export default function CursedKingdomGame() {
       }
 
       const p = state.player;
-      // Pick closest living enemy (prioritizing Boss if present in current wave)
       let focusEnemy: ActiveEnemy | null = null;
       let bestDist = 99999;
       for (const e of state.enemies) {
@@ -243,6 +329,10 @@ export default function CursedKingdomGame() {
         stamina: p.stamina,
         maxStamina: p.maxStamina,
         skillCooldownFrames: p.skillCooldown,
+        potionsLeft: state.potionsLeft,
+        poisoned: p.poisonTimer > 0,
+        rooted: p.rootTimer > 0,
+        lowHealth: p.hp / p.maxHp <= 0.3,
         coins: save.coins + state.coinsCollected,
         gems: save.gems + state.gemsCollected,
         currentWave: state.currentWave,
@@ -256,6 +346,11 @@ export default function CursedKingdomGame() {
         targetBossPhase: focusEnemy ? focusEnemy.bossPhase : 1,
         targetHasShield: Boolean(focusEnemy?.shieldActive),
         bossWarningText: state.bossWarningText,
+        bossIntroActive: state.bossIntroTimer > 0,
+        bossDefeatedText:
+          state.bossDefeatedTimer > 0 && state.bossDefeatedName
+            ? `👑 BOSS DEFEATED: ${state.bossDefeatedName.toUpperCase()}!`
+            : '',
         dialogueSpeaker: state.dialogueSpeaker,
         dialogueText: state.dialogueText,
         toast: state.toastText,
@@ -276,7 +371,7 @@ export default function CursedKingdomGame() {
     if (victory) {
       const hpRatio = state.player.hp / state.player.maxHp;
       const stars = hpRatio >= 0.65 ? 3 : hpRatio >= 0.35 ? 2 : 1;
-      const earnedCoins = state.coinsCollected + 40 + currentLevel.level * 12;
+      const earnedCoins = state.coinsCollected + 45 + currentLevel.level * 15;
       const earnedGems = Math.max(1, state.gemsCollected);
 
       const nextUnlocked =
@@ -289,11 +384,17 @@ export default function CursedKingdomGame() {
         updatedStars[currentLevel.level] = stars;
       }
 
+      const defeatedSet = new Set<MonsterId>(save.defeatedMonsters || []);
+      defeatedSet.add(currentLevel.monsterId);
+      defeatedSet.add(currentLevel.minionId);
+
       updateSave({
         ...save,
         unlockedLevel: nextUnlocked,
         coins: save.coins + earnedCoins,
         gems: save.gems + earnedGems,
+        potions: Math.max(1, state.potionsLeft),
+        defeatedMonsters: Array.from(defeatedSet),
         stars: updatedStars,
       });
 
@@ -312,6 +413,12 @@ export default function CursedKingdomGame() {
         setScreen('LEVEL_COMPLETE');
       }
     } else {
+      updateSave({
+        ...save,
+        coins: save.coins + state.coinsCollected,
+        potions: Math.max(1, state.potionsLeft),
+      });
+
       setHud((prev) => ({
         ...prev,
         elapsedSec,
@@ -320,14 +427,64 @@ export default function CursedKingdomGame() {
         levelCoinsEarned: state.coinsCollected,
         levelGemsEarned: state.gemsCollected,
       }));
-      setScreen('LEVEL_COMPLETE');
+      setScreen('GAME_OVER');
     }
+  };
+
+  const purchaseUpgrade = (category: UpgradeCategory) => {
+    const currentTier = save.upgrades[category] || 1;
+    const tiers = WARRIOR_UPGRADES[category];
+    if (currentTier >= tiers.length) {
+      setArmoryNotice('Already at Maximum Tier (Tier 5)!');
+      return;
+    }
+    const nextTierObj = tiers[currentTier];
+    if (save.coins < nextTierObj.cost) {
+      setArmoryNotice(
+        `Need ${nextTierObj.cost} Coins to unlock ${nextTierObj.name} (You have ${save.coins} 🪙)`
+      );
+      return;
+    }
+
+    const updatedUpgrades: PlayerUpgrades = {
+      ...save.upgrades,
+      [category]: currentTier + 1,
+    };
+    updateSave({
+      ...save,
+      coins: save.coins - nextTierObj.cost,
+      upgrades: updatedUpgrades,
+    });
+    vibrate('medium');
+    setArmoryNotice(`Upgraded to ${nextTierObj.name} (Tier ${currentTier + 1})!`);
+  };
+
+  const buyHealingPotion = () => {
+    const potionCost = 60;
+    if (save.coins < potionCost) {
+      setArmoryNotice(`Need ${potionCost} 🪙 to buy a Healing Potion!`);
+      return;
+    }
+    updateSave({
+      ...save,
+      coins: save.coins - potionCost,
+      potions: (save.potions || 0) + 1,
+    });
+    vibrate('light');
+    setArmoryNotice('Purchased +1 Healing Potion 🧪!');
   };
 
   const formatTime = (sec: number) => {
     const m = Math.floor(sec / 60);
     const s = sec % 60;
     return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+  };
+
+  const isMonsterDefeated = (m: MonsterConfig): boolean => {
+    return (
+      (save.defeatedMonsters && save.defeatedMonsters.includes(m.id)) ||
+      Boolean(save.stars[m.level] && save.stars[m.level] > 0)
+    );
   };
 
   // ==========================================================================
@@ -339,10 +496,15 @@ export default function CursedKingdomGame() {
         <View style={styles.menuLayout}>
           <View style={styles.menuLeftCol}>
             <Text style={styles.crownIcon}>👑</Text>
-            <Text style={styles.logoSmall}>THE</Text>
-            <Text style={styles.logoMain}>CURSED{'\n'}KINGDOM</Text>
+            <Text style={styles.logoSmall}>2D DARK-FANTASY ACTION RPG</Text>
+            <Text style={styles.logoMain}>THE CURSED{'\n'}KINGDOM</Text>
             <View style={styles.heroCliffBox}>
-              <WarriorArt size={105} attacking />
+              <WarriorArt size={100} attacking />
+            </View>
+            <View style={styles.menuCurrencyPill}>
+              <Text style={styles.currencyItem}>🪙 {save.coins}</Text>
+              <Text style={styles.currencyItem}>💎 {save.gems}</Text>
+              <Text style={styles.currencyItem}>🧪 {save.potions}</Text>
             </View>
           </View>
 
@@ -354,30 +516,33 @@ export default function CursedKingdomGame() {
                 setScreen('STORY');
               }}>
               <Text style={styles.menuBtnIcon}>▶</Text>
-              <Text style={styles.menuBtnLabel}>New Game</Text>
+              <Text style={styles.menuBtnLabel}>Play Story</Text>
             </Pressable>
 
             <Pressable
               style={styles.ornateMenuBtn}
               onPress={() => launchLevel(save.unlockedLevel)}>
-              <Text style={styles.menuBtnIcon}>📁</Text>
+              <Text style={styles.menuBtnIcon}>⚔️</Text>
               <Text style={styles.menuBtnLabel}>
-                Continue (Lv {save.unlockedLevel})
+                Continue (Level {save.unlockedLevel})
               </Text>
             </Pressable>
 
             <Pressable
               style={styles.ornateMenuBtn}
               onPress={() => setScreen('SELECT_WORLD')}>
-              <Text style={styles.menuBtnIcon}>📖</Text>
-              <Text style={styles.menuBtnLabel}>Level Selection</Text>
+              <Text style={styles.menuBtnIcon}>🗺️</Text>
+              <Text style={styles.menuBtnLabel}>Level Selection (13)</Text>
             </Pressable>
 
             <Pressable
               style={styles.ornateMenuBtn}
-              onPress={() => setScreen('LEVEL_MONSTER_PLAN')}>
-              <Text style={styles.menuBtnIcon}>⚔️</Text>
-              <Text style={styles.menuBtnLabel}>13-Level & Monster Plan</Text>
+              onPress={() => {
+                setArmoryNotice('');
+                setScreen('ARMORY');
+              }}>
+              <Text style={styles.menuBtnIcon}>🛡️</Text>
+              <Text style={styles.menuBtnLabel}>Warrior Upgrades</Text>
             </Pressable>
 
             <Pressable
@@ -415,15 +580,19 @@ export default function CursedKingdomGame() {
           <View style={styles.goldenRibbon}>
             <Text style={styles.ribbonTitle}>{ch.title}</Text>
           </View>
-          <View style={{ width: 40 }} />
+          <Pressable
+            style={styles.unlockAllMiniBtn}
+            onPress={() => launchLevel(save.unlockedLevel)}>
+            <Text style={styles.unlockAllMiniText}>Skip ▶</Text>
+          </Pressable>
         </View>
 
         <View style={styles.parchmentCard}>
           <View style={styles.storyArtBox}>
-            <MonsterArt monsterId="witch_final" size={76} />
+            <MonsterArt monsterId="witch_queen" size={76} />
             <Text style={styles.castleEmoji}>🏰</Text>
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
-              <Text style={{ fontSize: 36 }}>🤴</Text>
+              <Text style={{ fontSize: 34 }}>🤴</Text>
               <WarriorArt size={56} />
             </View>
           </View>
@@ -465,7 +634,126 @@ export default function CursedKingdomGame() {
   }
 
   // ==========================================================================
-  // 3. SELECT WORLD SCREEN
+  // 3. WARRIOR UPGRADE UI (ARMORY SCREEN)
+  // ==========================================================================
+  if (screen === 'ARMORY') {
+    const categories: { key: UpgradeCategory; title: string; subtitle: string }[] = [
+      { key: 'weapon', title: 'Weapon Upgrades', subtitle: 'Increases Light & Heavy Sword Damage' },
+      { key: 'armor', title: 'Armor Upgrades', subtitle: 'Reduces Enemy Damage & Boosts Shield Block' },
+      { key: 'health', title: 'Health Upgrades', subtitle: 'Increases Warrior Maximum HP' },
+      { key: 'skill', title: 'Stone Skill Upgrades', subtitle: 'Boosts Ancient Stone Power & Reduces Cooldown' },
+    ];
+
+    const previewHp = computePlayerMaxHp(save.unlockedLevel, save.upgrades.health);
+    const previewAtk = computePlayerSwordDamage(save.unlockedLevel, save.upgrades.weapon);
+    const previewDef = computePlayerDefense(save.unlockedLevel, save.upgrades.armor);
+
+    return (
+      <SafeAreaView style={styles.darkBackdrop}>
+        <View style={styles.topHeaderRow}>
+          <Pressable
+            style={styles.backCircleBtn}
+            onPress={() => setScreen('MAIN_MENU')}>
+            <Text style={styles.backArrowText}>←</Text>
+          </Pressable>
+          <View style={styles.goldenRibbon}>
+            <Text style={styles.ribbonTitle}>Warrior Upgrades & Armory</Text>
+          </View>
+          <View style={styles.currencyRow}>
+            <Text style={styles.currencyItem}>🪙 {save.coins}</Text>
+            <Text style={styles.currencyItem}>🧪 {save.potions}</Text>
+          </View>
+        </View>
+
+        {/* Warrior Live Stat Summary + Potion Restock */}
+        <View style={styles.armoryHeroBanner}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+            <WarriorArt size={52} attacking />
+            <View>
+              <Text style={styles.armoryHeroTitle}>
+                Royal Warrior (Lv {save.unlockedLevel})
+              </Text>
+              <Text style={styles.armoryHeroStats}>
+                ❤️ Max HP: {previewHp} • ⚔️ Sword ATK: {previewAtk} • 🛡️ DEF: {previewDef}
+              </Text>
+            </View>
+          </View>
+
+          <Pressable style={styles.buyPotionBtn} onPress={buyHealingPotion}>
+            <Text style={styles.buyPotionBtnText}>+1 Potion 🧪 (60 🪙)</Text>
+          </Pressable>
+        </View>
+
+        {armoryNotice ? (
+          <Text style={styles.armoryNoticeText}>{armoryNotice}</Text>
+        ) : null}
+
+        <ScrollView style={{ width: '100%' }} contentContainerStyle={styles.armoryGrid}>
+          {categories.map((cat) => {
+            const tierNum = save.upgrades[cat.key] || 1;
+            const tiers = WARRIOR_UPGRADES[cat.key];
+            const currentObj = tiers[tierNum - 1];
+            const nextObj = tiers[tierNum];
+            const canAfford = nextObj ? save.coins >= nextObj.cost : false;
+
+            return (
+              <View key={cat.key} style={styles.upgradeCard}>
+                <View style={styles.upgradeCardHeader}>
+                  <Text style={styles.upgradeIconBig}>{currentObj.icon}</Text>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.upgradeCatTitle}>{cat.title}</Text>
+                    <Text style={styles.upgradeEquippedName}>
+                      Equipped: {currentObj.name} (Tier {tierNum}/5)
+                    </Text>
+                    <Text style={styles.upgradeBonusText}>{currentObj.bonusLabel}</Text>
+                  </View>
+                </View>
+
+                {/* Tier Progress Dots */}
+                <View style={styles.tierBarsRow}>
+                  {[1, 2, 3, 4, 5].map((t) => (
+                    <View
+                      key={t}
+                      style={[
+                        styles.tierSegment,
+                        t <= tierNum && styles.tierSegmentFilled,
+                      ]}
+                    />
+                  ))}
+                </View>
+
+                {nextObj ? (
+                  <View style={styles.upgradeActionRow}>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.nextTierLabel}>
+                        Next: {nextObj.name}
+                      </Text>
+                      <Text style={styles.nextTierBonus}>{nextObj.bonusLabel}</Text>
+                    </View>
+                    <Pressable
+                      style={[
+                        styles.upgradeBuyBtn,
+                        !canAfford && styles.upgradeBuyBtnDisabled,
+                      ]}
+                      onPress={() => purchaseUpgrade(cat.key)}>
+                      <Text style={styles.upgradeBuyBtnText}>
+                        Upgrade ({nextObj.cost} 🪙)
+                      </Text>
+                    </Pressable>
+                  </View>
+                ) : (
+                  <Text style={styles.maxTierBadge}>★ MAX TIER UNLOCKED ★</Text>
+                )}
+              </View>
+            );
+          })}
+        </ScrollView>
+      </SafeAreaView>
+    );
+  }
+
+  // ==========================================================================
+  // 4. SELECT WORLD SCREEN (5 WORLDS MAP)
   // ==========================================================================
   if (screen === 'SELECT_WORLD') {
     return (
@@ -477,19 +765,26 @@ export default function CursedKingdomGame() {
             <Text style={styles.backArrowText}>←</Text>
           </Pressable>
           <View style={styles.goldenRibbon}>
-            <Text style={styles.ribbonTitle}>Select World</Text>
+            <Text style={styles.ribbonTitle}>Kingdom World Map (5 Worlds)</Text>
           </View>
-          <Pressable
-            style={styles.unlockAllMiniBtn}
-            onPress={() =>
-              updateSave({
-                ...save,
-                unlockedLevel: 13,
-                coins: Math.max(save.coins, 999),
-              })
-            }>
-            <Text style={styles.unlockAllMiniText}>Unlock All 13</Text>
-          </Pressable>
+          <View style={{ flexDirection: 'row', gap: 6 }}>
+            <Pressable
+              style={styles.unlockAllMiniBtn}
+              onPress={() => setScreen('LEVEL_MONSTER_PLAN')}>
+              <Text style={styles.unlockAllMiniText}>All 13 Map</Text>
+            </Pressable>
+            <Pressable
+              style={styles.unlockAllMiniBtn}
+              onPress={() =>
+                updateSave({
+                  ...save,
+                  unlockedLevel: 13,
+                  coins: Math.max(save.coins, 1500),
+                })
+              }>
+              <Text style={styles.unlockAllMiniText}>Unlock All</Text>
+            </Pressable>
+          </View>
         </View>
 
         <ScrollView
@@ -497,16 +792,19 @@ export default function CursedKingdomGame() {
           showsHorizontalScrollIndicator={false}
           contentContainerStyle={styles.worldsHorizontalRow}>
           {WORLDS_DATA.map((w) => {
+            const worldLevels = LEVELS_DATA.filter((l) => l.world === w.id);
+            const firstLv = worldLevels[0]?.level || 1;
+            const worldUnlocked = save.unlockedLevel >= firstLv;
             const representativeMonster: MonsterId =
               w.id === 1
-                ? 'wood_golem'
+                ? 'tree_guardian'
                 : w.id === 2
-                ? 'skeleton_warrior'
+                ? 'dark_witch'
                 : w.id === 3
-                ? 'witch_encounter'
+                ? 'three_headed_beast'
                 : w.id === 4
-                ? 'frost_guardian'
-                : 'witch_final';
+                ? 'cursed_dragon'
+                : 'witch_queen';
 
             return (
               <Pressable
@@ -517,6 +815,7 @@ export default function CursedKingdomGame() {
                     backgroundColor: w.bgBottom,
                     borderColor:
                       selectedWorldId === w.id ? '#ffd152' : w.cardBorder,
+                    opacity: worldUnlocked ? 1 : 0.65,
                   },
                 ]}
                 onPress={() => {
@@ -524,11 +823,15 @@ export default function CursedKingdomGame() {
                   setScreen('LEVEL_SELECT');
                 }}>
                 <Text style={styles.worldBadgeEmoji}>{w.badgeIcon}</Text>
+                <Text style={styles.worldDiffBadge}>{w.difficultyLabel}</Text>
                 <View style={styles.worldPillarArt}>
-                  <MonsterArt monsterId={representativeMonster} size={74} />
+                  <MonsterArt monsterId={representativeMonster} size={70} />
                 </View>
                 <Text style={styles.worldPillarTitle}>{w.shortName}</Text>
                 <Text style={styles.worldPillarRange}>{w.levelRange}</Text>
+                <Text style={styles.worldStatusTag}>
+                  {worldUnlocked ? '⚔️ Enter World' : `🔒 Lv ${firstLv}`}
+                </Text>
               </Pressable>
             );
           })}
@@ -538,7 +841,7 @@ export default function CursedKingdomGame() {
   }
 
   // ==========================================================================
-  // 4. LEVEL SELECTION — WORLD DETAIL
+  // 5. LEVEL SELECTION — WORLD LEVELS DETAIL
   // ==========================================================================
   if (screen === 'LEVEL_SELECT') {
     const world =
@@ -556,18 +859,18 @@ export default function CursedKingdomGame() {
           </Pressable>
           <View style={styles.goldenRibbon}>
             <Text style={styles.ribbonTitle}>
-              Level Selection – {world.shortName}
+              {world.shortName} {world.levelRange}
             </Text>
           </View>
           <Pressable
             style={styles.unlockAllMiniBtn}
-            onPress={() => setScreen('LEVEL_MONSTER_PLAN')}>
-            <Text style={styles.unlockAllMiniText}>All 13 Plan</Text>
+            onPress={() => setScreen('ARMORY')}>
+            <Text style={styles.unlockAllMiniText}>🛡️ Armory</Text>
           </Pressable>
         </View>
 
         <Text style={styles.worldSubHeader}>
-          {world.badgeIcon} {world.shortName} • {world.levelRange}
+          {world.badgeIcon} {world.name} • Difficulty: {world.difficultyLabel}
         </Text>
 
         <ScrollView
@@ -577,6 +880,7 @@ export default function CursedKingdomGame() {
           {worldLevels.map((lvl) => {
             const monster = MONSTERS_DATA[lvl.monsterId];
             const unlocked = lvl.level <= save.unlockedLevel;
+            const isCurrent = lvl.level === save.unlockedLevel;
             const stars = save.stars[lvl.level] || 0;
 
             return (
@@ -585,6 +889,7 @@ export default function CursedKingdomGame() {
                 style={[
                   styles.levelSquareCard,
                   unlocked && styles.levelSquareCardActive,
+                  isCurrent && { borderColor: '#38e4ae', borderWidth: 3.5 },
                 ]}>
                 <Pressable
                   disabled={!unlocked}
@@ -593,8 +898,11 @@ export default function CursedKingdomGame() {
                     { backgroundColor: world.bgBottom },
                   ]}
                   onPress={() => launchLevel(lvl.level)}>
-                  <MonsterArt monsterId={monster.id} size={78} />
-                  <Text style={styles.levelMonsterTag}>{monster.name}</Text>
+                  <MonsterArt monsterId={monster.id} size={74} />
+                  <Text style={styles.levelMonsterTag}>
+                    {monster.isBoss ? '👑 ' : ''}
+                    {monster.name}
+                  </Text>
                 </Pressable>
 
                 <Text style={styles.levelCardTitle}>
@@ -602,7 +910,9 @@ export default function CursedKingdomGame() {
                 </Text>
 
                 <View style={styles.monsterMetaRow}>
-                  <Text style={styles.monsterLvText}>⚔️ Lv {lvl.level}</Text>
+                  <Text style={styles.monsterLvText}>
+                    {monster.difficulty} • HP {monster.health}
+                  </Text>
                   <Text style={styles.monsterHeartsText}>
                     {'❤️'.repeat(Math.min(5, monster.hearts))}
                   </Text>
@@ -618,7 +928,9 @@ export default function CursedKingdomGame() {
                       <Pressable
                         style={styles.playLevelBtn}
                         onPress={() => launchLevel(lvl.level)}>
-                        <Text style={styles.playLevelBtnText}>▶ Play</Text>
+                        <Text style={styles.playLevelBtnText}>
+                          {isCurrent ? '▶ Current' : '▶ Play'}
+                        </Text>
                       </Pressable>
                       <Pressable
                         style={styles.infoMiniBtn}
@@ -626,7 +938,7 @@ export default function CursedKingdomGame() {
                           setSelectedMonster(monster);
                           setScreen('MONSTER_DETAIL');
                         }}>
-                        <Text style={styles.playLevelBtnText}>🔍 Stat</Text>
+                        <Text style={styles.playLevelBtnText}>🔍 Lore</Text>
                       </Pressable>
                     </View>
                   </View>
@@ -642,7 +954,7 @@ export default function CursedKingdomGame() {
   }
 
   // ==========================================================================
-  // 5. FULL 13-LEVEL & MONSTER PLAN BOARD
+  // 6. FULL 13-LEVEL & MONSTER PROGRESSION MAP BOARD
   // ==========================================================================
   if (screen === 'LEVEL_MONSTER_PLAN') {
     return (
@@ -650,18 +962,18 @@ export default function CursedKingdomGame() {
         <View style={styles.topHeaderRow}>
           <Pressable
             style={styles.backCircleBtn}
-            onPress={() => setScreen('MAIN_MENU')}>
+            onPress={() => setScreen('SELECT_WORLD')}>
             <Text style={styles.backArrowText}>←</Text>
           </Pressable>
           <View style={styles.goldenRibbon}>
             <Text style={styles.ribbonTitle}>
-              The Cursed Kingdom — 13-Level & Monster Plan
+              Complete 13-Level Monster Progression Map
             </Text>
           </View>
           <Pressable
             style={styles.unlockAllMiniBtn}
             onPress={() => setScreen('MONSTER_GALLERY')}>
-            <Text style={styles.unlockAllMiniText}>Monster Gallery</Text>
+            <Text style={styles.unlockAllMiniText}>Gallery (13)</Text>
           </Pressable>
         </View>
 
@@ -673,37 +985,43 @@ export default function CursedKingdomGame() {
                 key={w.id}
                 style={[styles.planWorldBox, { borderColor: w.cardBorder }]}>
                 <Text style={[styles.planWorldHeader, { color: w.accent }]}>
-                  {w.badgeIcon} {w.name} {w.levelRange}
+                  {w.badgeIcon} {w.name} • {w.difficultyLabel} {w.levelRange}
                 </Text>
 
                 <ScrollView horizontal showsHorizontalScrollIndicator={false}>
                   <View style={{ flexDirection: 'row', gap: 10 }}>
                     {lvls.map((lvl) => {
                       const m = MONSTERS_DATA[lvl.monsterId];
+                      const unlocked = lvl.level <= save.unlockedLevel;
+                      const stars = save.stars[lvl.level] || 0;
                       return (
                         <Pressable
                           key={lvl.level}
                           style={[
                             styles.planLevelCard,
-                            { backgroundColor: w.bgBottom },
+                            {
+                              backgroundColor: w.bgBottom,
+                              borderColor: unlocked ? '#ffd152' : '#495057',
+                            },
                           ]}
-                          onPress={() => launchLevel(lvl.level)}>
+                          onPress={() => {
+                            if (unlocked) launchLevel(lvl.level);
+                          }}>
                           <Text style={styles.planLevelNum}>
-                            Level {lvl.level}
+                            Level {lvl.level} {unlocked ? '🔓' : '🔒'}
                           </Text>
                           <Text style={styles.planLevelSub}>{lvl.name}</Text>
                           <View style={{ marginVertical: 6 }}>
-                            <MonsterArt monsterId={m.id} size={58} />
+                            <MonsterArt monsterId={m.id} size={56} />
                           </View>
                           <Text style={styles.planMonsterName}>{m.name}</Text>
-                          <View style={styles.monsterMetaRow}>
-                            <Text style={styles.monsterLvText}>
-                              ⚔️ Lv {lvl.level}
-                            </Text>
-                            <Text style={styles.monsterHeartsText}>
-                              {'❤️'.repeat(Math.min(5, m.hearts))}
-                            </Text>
-                          </View>
+                          <Text style={styles.galleryMonsterLv}>
+                            {m.difficulty} • HP {m.health}
+                          </Text>
+                          <Text style={{ color: '#ffd152', fontSize: 12 }}>
+                            {'★'.repeat(stars)}
+                            {'☆'.repeat(3 - stars)}
+                          </Text>
                         </Pressable>
                       );
                     })}
@@ -718,7 +1036,7 @@ export default function CursedKingdomGame() {
   }
 
   // ==========================================================================
-  // 6. MONSTER GALLERY & MONSTER DETAIL UI
+  // 7. MONSTER GALLERY & MONSTER DETAIL UI (WITH DEFEATED / LOCKED STATUS)
   // ==========================================================================
   if (screen === 'MONSTER_GALLERY') {
     return (
@@ -736,21 +1054,51 @@ export default function CursedKingdomGame() {
         </View>
 
         <ScrollView contentContainerStyle={styles.galleryGrid}>
-          {MONSTER_GALLERY_LIST.map((m) => (
-            <Pressable
-              key={m.id}
-              style={[styles.galleryItemCard, { borderColor: m.themeColor }]}
-              onPress={() => {
-                setSelectedMonster(m);
-                setScreen('MONSTER_DETAIL');
-              }}>
-              <MonsterArt monsterId={m.id} size={64} />
-              <Text style={styles.galleryMonsterName}>{m.name}</Text>
-              <Text style={styles.galleryMonsterLv}>
-                Lv {m.level} • {'❤️'.repeat(Math.min(5, m.hearts))}
-              </Text>
-            </Pressable>
-          ))}
+          {MONSTER_GALLERY_LIST.map((m) => {
+            const defeated = isMonsterDefeated(m);
+            const encountered = m.level <= save.unlockedLevel;
+            return (
+              <Pressable
+                key={m.id}
+                style={[
+                  styles.galleryItemCard,
+                  {
+                    borderColor: defeated
+                      ? '#38e4ae'
+                      : encountered
+                      ? m.themeColor
+                      : '#495057',
+                  },
+                ]}
+                onPress={() => {
+                  setSelectedMonster(m);
+                  setScreen('MONSTER_DETAIL');
+                }}>
+                <MonsterArt monsterId={m.id} size={60} />
+                <Text style={styles.galleryMonsterName}>{m.name}</Text>
+                <Text style={styles.galleryMonsterLv}>
+                  Lv {m.level} • {m.difficulty}
+                </Text>
+                <Text
+                  style={[
+                    styles.galleryStatusBadge,
+                    {
+                      color: defeated
+                        ? '#38e4ae'
+                        : encountered
+                        ? '#ffd152'
+                        : '#adb5bd',
+                    },
+                  ]}>
+                  {defeated
+                    ? '✅ Defeated'
+                    : encountered
+                    ? '⚔️ Unlocked'
+                    : '🔒 Locked'}
+                </Text>
+              </Pressable>
+            );
+          })}
         </ScrollView>
       </SafeAreaView>
     );
@@ -758,6 +1106,9 @@ export default function CursedKingdomGame() {
 
   if (screen === 'MONSTER_DETAIL') {
     const m = selectedMonster;
+    const defeated = isMonsterDefeated(m);
+    const unlocked = m.level <= save.unlockedLevel;
+
     return (
       <SafeAreaView style={styles.darkBackdrop}>
         <View style={styles.topHeaderRow}>
@@ -767,28 +1118,48 @@ export default function CursedKingdomGame() {
             <Text style={styles.backArrowText}>←</Text>
           </Pressable>
           <View style={styles.goldenRibbon}>
-            <Text style={styles.ribbonTitle}>Monster Detail — {m.name}</Text>
+            <Text style={styles.ribbonTitle}>
+              Lv {m.level} — {m.name} ({m.difficulty})
+            </Text>
           </View>
-          <Pressable
-            style={styles.unlockAllMiniBtn}
-            onPress={() => launchLevel(m.level)}>
-            <Text style={styles.unlockAllMiniText}>Fight Lv {m.level} ▶</Text>
-          </Pressable>
+          {unlocked ? (
+            <Pressable
+              style={styles.unlockAllMiniBtn}
+              onPress={() => launchLevel(m.level)}>
+              <Text style={styles.unlockAllMiniText}>Fight Lv {m.level} ▶</Text>
+            </Pressable>
+          ) : (
+            <View style={{ width: 60 }} />
+          )}
         </View>
 
         <View style={[styles.monsterDetailFrame, { borderColor: m.themeColor }]}>
           <View style={styles.monsterDetailTopRow}>
             <View style={styles.monsterDetailPortrait}>
-              <MonsterArt monsterId={m.id} size={115} />
+              <MonsterArt monsterId={m.id} size={100} />
               <Text style={styles.monsterHeartsText}>
                 {'❤️'.repeat(m.hearts)}
+              </Text>
+              <Text
+                style={{
+                  color: defeated ? '#38e4ae' : '#ffd152',
+                  fontSize: 11,
+                  fontWeight: '900',
+                  marginTop: 4,
+                }}>
+                {defeated ? '✅ DEFEATED' : unlocked ? '⚔️ ENCOUNTERED' : '🔒 LOCKED'}
               </Text>
             </View>
 
             <View style={styles.monsterStatsCol}>
               <View style={styles.monsterRibbonBanner}>
-                <Text style={styles.monsterRibbonText}>{m.name}</Text>
+                <Text style={styles.monsterRibbonText}>
+                  {m.isBoss ? '👑 ' : ''}
+                  {m.name}
+                </Text>
               </View>
+
+              <Text style={styles.monsterLoreDesc}>{m.description}</Text>
 
               <View style={styles.statLine}>
                 <Text style={styles.statLabel}>❤️ Health</Text>
@@ -797,12 +1168,12 @@ export default function CursedKingdomGame() {
                 </Text>
               </View>
               <View style={styles.statLine}>
-                <Text style={styles.statLabel}>⚔️ Attack</Text>
-                <Text style={styles.statNumber}>{m.attack}</Text>
+                <Text style={styles.statLabel}>⚔️ Attack Type</Text>
+                <Text style={styles.statNumber}>{m.attackType}</Text>
               </View>
               <View style={styles.statLine}>
-                <Text style={styles.statLabel}>🛡️ Defense</Text>
-                <Text style={styles.statNumber}>{m.defense}</Text>
+                <Text style={styles.statLabel}>✨ Special</Text>
+                <Text style={styles.statNumber}>{m.specialDesc}</Text>
               </View>
               <View style={styles.statLine}>
                 <Text style={styles.statLabel}>💨 Speed</Text>
@@ -811,13 +1182,12 @@ export default function CursedKingdomGame() {
             </View>
           </View>
 
-          <Text style={styles.abilitiesTitle}>Abilities</Text>
           <View style={styles.abilitiesRow}>
             {m.abilities.map((ab, i) => (
               <View
                 key={i}
                 style={[styles.abilityBox, { borderColor: ab.color }]}>
-                <Text style={{ fontSize: 22 }}>{ab.icon}</Text>
+                <Text style={{ fontSize: 18 }}>{ab.icon}</Text>
                 <Text style={styles.abilityNameText}>{ab.name}</Text>
               </View>
             ))}
@@ -828,11 +1198,15 @@ export default function CursedKingdomGame() {
   }
 
   // ==========================================================================
-  // 7. SETTINGS SCREEN
+  // 8. SETTINGS SCREEN
   // ==========================================================================
   if (screen === 'SETTINGS') {
-    const tabs: Array<'General' | 'Controls' | 'Audio' | 'Graphics' | 'Language'> =
-      ['General', 'Controls', 'Audio', 'Graphics', 'Language'];
+    const tabs: Array<'General' | 'Controls' | 'Audio' | 'Graphics'> = [
+      'General',
+      'Controls',
+      'Audio',
+      'Graphics',
+    ];
 
     return (
       <SafeAreaView style={styles.darkBackdrop}>
@@ -864,67 +1238,92 @@ export default function CursedKingdomGame() {
           </View>
 
           <View style={styles.settingsContentCol}>
-            <Text style={styles.settingsHeading}>{settingsTab}</Text>
+            <Text style={styles.settingsHeading}>{settingsTab} Settings</Text>
 
-            <View style={styles.settingControlRow}>
-              <Text style={styles.settingControlLabel}>🎵 Music</Text>
-              <View style={styles.sliderTrack}>
-                <View
-                  style={[styles.sliderFill, { width: `${save.musicVol}%` }]}
-                />
+            {settingsTab === 'Controls' ? (
+              <View style={{ gap: 6 }}>
+                <Text style={styles.controlsHelpText}>
+                  📱 Android Touch: Bottom-left Move (◀ ▶) • Bottom-right Jump (↑), Light Sword (🗡️), Heavy Cleave (⚒️), Block (🛡️), Dodge (💨), Stone Skill (🌀), and Healing Potion (🧪).
+                </Text>
+                <Text style={styles.controlsHelpText}>
+                  ⌨️ PC Keyboard: A/D or Arrows to Move • W/Space to Jump • J Light Attack • H Heavy Attack • K Block • L/Shift Dodge • U Stone Skill • I/Q Use Potion.
+                </Text>
               </View>
-              <Pressable
-                onPress={() =>
-                  updateSave({
-                    ...save,
-                    musicVol: save.musicVol >= 100 ? 0 : save.musicVol + 20,
-                  })
-                }>
-                <Text style={styles.settingValueText}>{save.musicVol}%</Text>
-              </Pressable>
-            </View>
+            ) : (
+              <>
+                <View style={styles.settingControlRow}>
+                  <Text style={styles.settingControlLabel}>🎵 Music Volume</Text>
+                  <View style={styles.sliderTrack}>
+                    <View
+                      style={[styles.sliderFill, { width: `${save.musicVol}%` }]}
+                    />
+                  </View>
+                  <Pressable
+                    onPress={() =>
+                      updateSave({
+                        ...save,
+                        musicVol: save.musicVol >= 100 ? 0 : save.musicVol + 20,
+                      })
+                    }>
+                    <Text style={styles.settingValueText}>{save.musicVol}%</Text>
+                  </Pressable>
+                </View>
 
-            <View style={styles.settingControlRow}>
-              <Text style={styles.settingControlLabel}>🔊 SFX</Text>
-              <View style={styles.sliderTrack}>
-                <View
-                  style={[styles.sliderFill, { width: `${save.sfxVol}%` }]}
-                />
-              </View>
-              <Pressable
-                onPress={() =>
-                  updateSave({
-                    ...save,
-                    sfxVol: save.sfxVol >= 100 ? 0 : save.sfxVol + 20,
-                  })
-                }>
-                <Text style={styles.settingValueText}>{save.sfxVol}%</Text>
-              </Pressable>
-            </View>
+                <View style={styles.settingControlRow}>
+                  <Text style={styles.settingControlLabel}>🔊 SFX Volume</Text>
+                  <View style={styles.sliderTrack}>
+                    <View
+                      style={[styles.sliderFill, { width: `${save.sfxVol}%` }]}
+                    />
+                  </View>
+                  <Pressable
+                    onPress={() =>
+                      updateSave({
+                        ...save,
+                        sfxVol: save.sfxVol >= 100 ? 0 : save.sfxVol + 20,
+                      })
+                    }>
+                    <Text style={styles.settingValueText}>{save.sfxVol}%</Text>
+                  </Pressable>
+                </View>
 
-            <View style={styles.settingControlRow}>
-              <Text style={styles.settingControlLabel}>📳 Vibration</Text>
-              <Switch
-                value={save.vibration}
-                onValueChange={(v) => updateSave({ ...save, vibration: v })}
-              />
-            </View>
+                <View style={styles.settingControlRow}>
+                  <Text style={styles.settingControlLabel}>🎶 Music Enabled</Text>
+                  <Switch
+                    value={save.musicEnabled}
+                    onValueChange={(v) =>
+                      updateSave({ ...save, musicEnabled: v })
+                    }
+                  />
+                </View>
 
-            <View style={styles.settingControlRow}>
-              <Text style={styles.settingControlLabel}>☀️ Screen Shake</Text>
-              <Switch
-                value={save.screenShake}
-                onValueChange={(v) => updateSave({ ...save, screenShake: v })}
-              />
-            </View>
+                <View style={styles.settingControlRow}>
+                  <Text style={styles.settingControlLabel}>🔔 Sound Effects</Text>
+                  <Switch
+                    value={save.sfxEnabled}
+                    onValueChange={(v) => updateSave({ ...save, sfxEnabled: v })}
+                  />
+                </View>
 
-            <View style={styles.settingControlRow}>
-              <Text style={styles.settingControlLabel}>📺 Fullscreen</Text>
-              <Switch
-                value={save.fullscreen}
-                onValueChange={(v) => updateSave({ ...save, fullscreen: v })}
-              />
-            </View>
+                <View style={styles.settingControlRow}>
+                  <Text style={styles.settingControlLabel}>📳 Vibration</Text>
+                  <Switch
+                    value={save.vibration}
+                    onValueChange={(v) => updateSave({ ...save, vibration: v })}
+                  />
+                </View>
+
+                <View style={styles.settingControlRow}>
+                  <Text style={styles.settingControlLabel}>💥 Screen Shake</Text>
+                  <Switch
+                    value={save.screenShake}
+                    onValueChange={(v) =>
+                      updateSave({ ...save, screenShake: v })
+                    }
+                  />
+                </View>
+              </>
+            )}
           </View>
         </View>
       </SafeAreaView>
@@ -932,14 +1331,16 @@ export default function CursedKingdomGame() {
   }
 
   // ==========================================================================
-  // 8. PAUSED MODAL
+  // 9. PAUSED MODAL
   // ==========================================================================
   if (screen === 'PAUSE') {
     return (
       <SafeAreaView style={styles.darkBackdrop}>
         <View style={styles.pausedDialog}>
           <View style={styles.goldenRibbon}>
-            <Text style={styles.ribbonTitle}>Paused</Text>
+            <Text style={styles.ribbonTitle}>
+              Paused — Level {currentLevel.level}
+            </Text>
           </View>
 
           <View style={{ width: '100%', gap: 10, marginTop: 14 }}>
@@ -950,7 +1351,7 @@ export default function CursedKingdomGame() {
                 setScreen('GAMEPLAY');
               }}>
               <Text style={styles.menuBtnIcon}>▶</Text>
-              <Text style={styles.menuBtnLabel}>Resume</Text>
+              <Text style={styles.menuBtnLabel}>Resume Battle</Text>
             </Pressable>
 
             <Pressable
@@ -958,6 +1359,16 @@ export default function CursedKingdomGame() {
               onPress={() => launchLevel(currentLevel.level)}>
               <Text style={styles.menuBtnIcon}>↻</Text>
               <Text style={styles.menuBtnLabel}>Restart Level</Text>
+            </Pressable>
+
+            <Pressable
+              style={styles.ornateMenuBtn}
+              onPress={() => {
+                setArmoryNotice('');
+                setScreen('ARMORY');
+              }}>
+              <Text style={styles.menuBtnIcon}>🛡️</Text>
+              <Text style={styles.menuBtnLabel}>Warrior Upgrades</Text>
             </Pressable>
 
             <Pressable
@@ -971,7 +1382,7 @@ export default function CursedKingdomGame() {
               style={styles.ornateMenuBtn}
               onPress={() => setScreen('MAIN_MENU')}>
               <Text style={styles.menuBtnIcon}>🏠</Text>
-              <Text style={styles.menuBtnLabel}>Main Menu</Text>
+              <Text style={styles.menuBtnLabel}>Return to Main Menu</Text>
             </Pressable>
           </View>
         </View>
@@ -980,14 +1391,18 @@ export default function CursedKingdomGame() {
   }
 
   // ==========================================================================
-  // 9. LEVEL COMPLETE! SCREEN
+  // 10. LEVEL COMPLETION (VICTORY) SCREEN
   // ==========================================================================
   if (screen === 'LEVEL_COMPLETE') {
+    const defeatedMonster = MONSTERS_DATA[currentLevel.monsterId];
     return (
       <SafeAreaView style={styles.darkBackdrop}>
         <View style={styles.levelCompleteLayout}>
           <View style={styles.completeHeroCol}>
-            <WarriorArt size={120} />
+            <WarriorArt size={105} attacking />
+            <Text style={styles.defeatedTagText}>
+              Vanquished: {defeatedMonster.name}
+            </Text>
           </View>
 
           <View style={styles.completeBox}>
@@ -998,25 +1413,31 @@ export default function CursedKingdomGame() {
 
             <View style={styles.redVictoryRibbon}>
               <Text style={styles.ribbonTitle}>
-                {hud.victory ? 'Level Complete!' : 'Level Failed'}
+                Level {currentLevel.level} Complete!
               </Text>
             </View>
 
+            <Text style={styles.clearNoteText}>{currentLevel.clearNote}</Text>
+
             <View style={styles.completeStatsPanel}>
+              <View style={styles.completeStatRow}>
+                <Text style={styles.completeStatLabel}>🐉 Defeated Monster</Text>
+                <Text style={styles.completeStatVal}>{defeatedMonster.name}</Text>
+              </View>
               <View style={styles.completeStatRow}>
                 <Text style={styles.completeStatLabel}>🪙 Coins Collected</Text>
                 <Text style={styles.completeStatVal}>
-                  × {hud.levelCoinsEarned}
+                  +{hud.levelCoinsEarned}
                 </Text>
               </View>
               <View style={styles.completeStatRow}>
                 <Text style={styles.completeStatLabel}>💎 Gems Collected</Text>
                 <Text style={styles.completeStatVal}>
-                  × {hud.levelGemsEarned}
+                  +{hud.levelGemsEarned}
                 </Text>
               </View>
               <View style={styles.completeStatRow}>
-                <Text style={styles.completeStatLabel}>🕒 Time</Text>
+                <Text style={styles.completeStatLabel}>🕒 Completion Time</Text>
                 <Text style={styles.completeStatVal}>
                   {formatTime(hud.elapsedSec)}
                 </Text>
@@ -1027,10 +1448,19 @@ export default function CursedKingdomGame() {
               <Pressable
                 style={styles.retryBtn}
                 onPress={() => launchLevel(currentLevel.level)}>
-                <Text style={styles.menuBtnLabel}>↻ Retry</Text>
+                <Text style={styles.menuBtnLabel}>↻ Replay</Text>
               </Pressable>
 
-              {hud.victory && currentLevel.level < 13 ? (
+              <Pressable
+                style={styles.retryBtn}
+                onPress={() => {
+                  setArmoryNotice('');
+                  setScreen('ARMORY');
+                }}>
+                <Text style={styles.menuBtnLabel}>🛡️ Upgrades</Text>
+              </Pressable>
+
+              {currentLevel.level < 13 ? (
                 <Pressable
                   style={styles.nextLevelGoldBtn}
                   onPress={() => launchLevel(currentLevel.level + 1)}>
@@ -1039,8 +1469,8 @@ export default function CursedKingdomGame() {
               ) : (
                 <Pressable
                   style={styles.nextLevelGoldBtn}
-                  onPress={() => setScreen('SELECT_WORLD')}>
-                  <Text style={styles.nextLevelGoldText}>World Map &gt;</Text>
+                  onPress={() => setScreen('MAIN_MENU')}>
+                  <Text style={styles.nextLevelGoldText}>Main Menu</Text>
                 </Pressable>
               )}
             </View>
@@ -1051,29 +1481,100 @@ export default function CursedKingdomGame() {
   }
 
   // ==========================================================================
-  // 10. THE KINGDOM IS SAVED! ENDING SCREEN
+  // 11. DEDICATED GAME OVER (DEFEAT) SCREEN
+  // ==========================================================================
+  if (screen === 'GAME_OVER') {
+    const monster = MONSTERS_DATA[currentLevel.monsterId];
+    return (
+      <SafeAreaView style={styles.gameOverBackdrop}>
+        <View style={styles.levelCompleteLayout}>
+          <View style={styles.completeHeroCol}>
+            <WarriorArt size={95} defeated />
+            <View style={{ marginTop: 12, alignItems: 'center' }}>
+              <MonsterArt monsterId={monster.id} size={64} />
+              <Text style={styles.gameOverSubText}>
+                Felled by {monster.name}
+              </Text>
+            </View>
+          </View>
+
+          <View style={[styles.completeBox, { borderColor: '#e63946' }]}>
+            <View style={[styles.redVictoryRibbon, { backgroundColor: '#660708' }]}>
+              <Text style={[styles.ribbonTitle, { color: '#ffffff' }]}>
+                💀 DEFEATED IN BATTLE
+              </Text>
+            </View>
+
+            <Text style={styles.clearNoteText}>
+              The darkness of Level {currentLevel.level} overwhelmed you! Upgrade your Weapon, Armor, and Health in the Armory or use Healing Potions (🧪) during combat.
+            </Text>
+
+            <View style={styles.completeStatsPanel}>
+              <View style={styles.completeStatRow}>
+                <Text style={styles.completeStatLabel}>🌊 Wave Reached</Text>
+                <Text style={styles.completeStatVal}>
+                  Wave {hud.currentWave}/{hud.totalWaves}
+                </Text>
+              </View>
+              <View style={styles.completeStatRow}>
+                <Text style={styles.completeStatLabel}>🪙 Coins Kept</Text>
+                <Text style={styles.completeStatVal}>
+                  +{hud.levelCoinsEarned}
+                </Text>
+              </View>
+            </View>
+
+            <View style={styles.completeBtnsRow}>
+              <Pressable
+                style={styles.nextLevelGoldBtn}
+                onPress={() => launchLevel(currentLevel.level)}>
+                <Text style={styles.nextLevelGoldText}>↻ Retry Level</Text>
+              </Pressable>
+
+              <Pressable
+                style={styles.retryBtn}
+                onPress={() => {
+                  setArmoryNotice('');
+                  setScreen('ARMORY');
+                }}>
+                <Text style={styles.menuBtnLabel}>🛡️ Armory</Text>
+              </Pressable>
+
+              <Pressable
+                style={styles.retryBtn}
+                onPress={() => setScreen('LEVEL_SELECT')}>
+                <Text style={styles.menuBtnLabel}>🗺️ Levels</Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  // ==========================================================================
+  // 12. THE KINGDOM IS SAVED! ENDING SCREEN
   // ==========================================================================
   if (screen === 'ENDING') {
     return (
       <SafeAreaView style={styles.endingSunlitBg}>
         <View style={styles.goldenRibbon}>
-          <Text style={styles.ribbonTitle}>The Kingdom is Saved!</Text>
+          <Text style={styles.ribbonTitle}>👑 The Kingdom is Saved!</Text>
         </View>
 
         <View style={styles.endingCastleScene}>
-          <Text style={{ fontSize: 56 }}>🏰</Text>
+          <Text style={{ fontSize: 54 }}>🏰</Text>
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 16 }}>
-            <WarriorArt size={76} />
+            <WarriorArt size={76} attacking />
             <Text style={{ fontSize: 48 }}>🤴</Text>
           </View>
         </View>
 
         <View style={styles.endingParchmentBanner}>
           <Text style={styles.endingParchmentText}>
-            With the power of the Ancient Stone, the witch’s curse is broken,
-            and peace returns to the kingdom.{'\n'}
+            With the awakened power of the Ancient Magical Stone, you shattered the Witch Queen’s dark shield and broke the curse across all five worlds!{'\n'}
             <Text style={{ fontWeight: '900' }}>
-              You have saved your people. You are the true hero of the kingdom!
+              The King is saved and peace returns to the realm. You are the legendary champion of the Kingdom!
             </Text>
           </Text>
         </View>
@@ -1088,7 +1589,7 @@ export default function CursedKingdomGame() {
   }
 
   // ==========================================================================
-  // 11. GAMEPLAY SCREEN + FULL COMBAT HUD
+  // 13. GAMEPLAY SCREEN + FULL DARK-FANTASY COMBAT HUD
   // ==========================================================================
   const state = engineRef.current;
   const p = state.player;
@@ -1101,6 +1602,7 @@ export default function CursedKingdomGame() {
   const skillReady = hud.skillCooldownFrames <= 0;
   const skillCooldownSec = (hud.skillCooldownFrames / 60).toFixed(1);
   const activeWaveDef = state.level.waves[state.currentWave - 1];
+  const stageBossMonster = MONSTERS_DATA[currentLevel.monsterId];
 
   return (
     <SafeAreaView
@@ -1110,10 +1612,19 @@ export default function CursedKingdomGame() {
       ]}>
       {/* TOP GAMEPLAY HUD */}
       <View style={styles.hudTopContainer}>
-        {/* Top-Left: Circular Hero Portrait + 4 Red Hearts + HP Bar + Stamina Bar + Lv */}
+        {/* Top-Left: Warrior Portrait + Health Bar + Numeric HP + Stamina Bar + Low-HP Warning */}
         <View style={styles.heroHudLeft}>
-          <View style={styles.heroAvatarCircle}>
-            <WarriorArt size={38} attacking={p.attackTimer > 0} blocking={p.blocking} />
+          <View
+            style={[
+              styles.heroAvatarCircle,
+              hud.lowHealth && { borderColor: '#ff2a55' },
+            ]}>
+            <WarriorArt
+              size={38}
+              attacking={p.attackTimer > 0}
+              heavyAttacking={p.heavyAttackTimer > 0}
+              blocking={p.blocking}
+            />
           </View>
           <View>
             <View style={styles.heartsRow}>
@@ -1121,7 +1632,7 @@ export default function CursedKingdomGame() {
                 <Text
                   key={h}
                   style={{
-                    fontSize: 12,
+                    fontSize: 11,
                     opacity: h <= hud.hearts ? 1 : 0.25,
                   }}>
                   ❤️
@@ -1130,11 +1641,20 @@ export default function CursedKingdomGame() {
               <Text style={styles.hudNumericText}>
                 HP {Math.ceil(hud.hp)}/{hud.maxHp}
               </Text>
+              {hud.lowHealth && (
+                <Text style={styles.lowHpWarningBadge}>⚠️ LOW HP!</Text>
+              )}
             </View>
-            {/* HP Bar */}
+            {/* Health Bar */}
             <View style={styles.greenBarTrack}>
               <View
-                style={[styles.greenBarFill, { width: `${hpPercent}%` }]}
+                style={[
+                  styles.greenBarFill,
+                  {
+                    width: `${hpPercent}%`,
+                    backgroundColor: hud.lowHealth ? '#ff2a55' : '#52b788',
+                  },
+                ]}
               />
             </View>
             {/* Stamina Bar */}
@@ -1143,27 +1663,40 @@ export default function CursedKingdomGame() {
                 style={[styles.staminaBarFill, { width: `${staPercent}%` }]}
               />
             </View>
-            <Text style={styles.heroLvBadgeText}>
-              Lv {currentLevel.level} • STA {Math.floor(hud.stamina)}
-            </Text>
+            <View style={{ flexDirection: 'row', gap: 6, marginTop: 2 }}>
+              <Text style={styles.heroLvBadgeText}>
+                STA {Math.floor(hud.stamina)}/{hud.maxStamina}
+              </Text>
+              {hud.poisoned && (
+                <Text style={{ color: '#80ed99', fontSize: 9, fontWeight: '900' }}>
+                  🧪 POISON
+                </Text>
+              )}
+              {hud.rooted && (
+                <Text style={{ color: '#52b788', fontSize: 9, fontWeight: '900' }}>
+                  🌿 ROOTED
+                </Text>
+              )}
+            </View>
           </View>
         </View>
 
-        {/* Top-Center: Wave Counter & Remaining Enemies */}
+        {/* Top-Center: World, Level Name, Wave Counter & Remaining Enemies */}
         <View style={styles.waveCounterPill}>
-          <Text style={styles.waveTitleText}>
-            WAVE {hud.currentWave}/{hud.totalWaves}
+          <Text style={styles.levelHudTitleText}>
+            W{currentWorld.id} • Lv {currentLevel.level}: {currentLevel.name}
           </Text>
-          <Text style={styles.waveSubText}>
-            FOES LEFT: {hud.remainingEnemies}
+          <Text style={styles.waveTitleText}>
+            WAVE {hud.currentWave}/{hud.totalWaves} • FOES LEFT: {hud.remainingEnemies}
           </Text>
         </View>
 
-        {/* Top-Right: Coins + Gems + Pause + In-Game Enemy / Boss HUD */}
+        {/* Top-Right: Coins + Gems + Potions + Pause + Enemy / Boss HUD */}
         <View style={styles.hudTopRightCol}>
           <View style={styles.currencyRow}>
             <Text style={styles.currencyItem}>🪙 {hud.coins}</Text>
             <Text style={styles.currencyItem}>💎 {hud.gems}</Text>
+            <Text style={styles.currencyItem}>🧪 {hud.potionsLeft}</Text>
             <Pressable
               style={styles.pauseCircleBtn}
               onPress={() => {
@@ -1174,21 +1707,24 @@ export default function CursedKingdomGame() {
             </Pressable>
           </View>
 
-          {/* In-Game Enemy / Boss HUD */}
+          {/* In-Game Enemy / Boss Health Bar */}
           {hud.targetEnemyHp > 0 && (
             <View
               style={[
                 styles.enemyHudFrame,
-                hud.targetEnemyIsBoss && { borderColor: '#ff2a55' },
+                hud.targetEnemyIsBoss && {
+                  borderColor: '#ff2a55',
+                  width: 215,
+                },
               ]}>
               <View style={styles.enemyEmblemCircle}>
                 <MonsterArt monsterId={hud.targetEnemyId} size={24} />
               </View>
               <View style={{ flex: 1 }}>
                 <Text style={styles.enemyHudName}>
-                  {hud.targetEnemyIsBoss ? '👑 ' : ''}
+                  {hud.targetEnemyIsBoss ? '👑 BOSS: ' : ''}
                   {hud.targetEnemyName}
-                  {hud.targetBossPhase === 2 ? ' [P2]' : ''}
+                  {hud.targetEnemyIsBoss ? ` [P${hud.targetBossPhase}]` : ''}
                   {hud.targetHasShield ? ' 🛡️' : ''}
                 </Text>
                 <View style={styles.enemyRedTrack}>
@@ -1200,7 +1736,7 @@ export default function CursedKingdomGame() {
                   />
                 </View>
                 <Text style={styles.enemyHpNumText}>
-                  {hud.targetEnemyHp}/{hud.targetEnemyMaxHp}
+                  HP {hud.targetEnemyHp}/{hud.targetEnemyMaxHp}
                 </Text>
               </View>
             </View>
@@ -1208,8 +1744,12 @@ export default function CursedKingdomGame() {
         </View>
       </View>
 
-      {/* BOSS TELEGRAPHED ATTACK WARNING BANNER */}
-      {hud.bossWarningText ? (
+      {/* BOSS TELEGRAPHED ATTACK WARNING OR BOSS DEFEATED BANNER */}
+      {hud.bossDefeatedText ? (
+        <View style={styles.bossDefeatedBanner}>
+          <Text style={styles.bossDefeatedBannerText}>{hud.bossDefeatedText}</Text>
+        </View>
+      ) : hud.bossWarningText ? (
         <View style={styles.bossWarningBanner}>
           <Text style={styles.bossWarningText}>{hud.bossWarningText}</Text>
         </View>
@@ -1221,14 +1761,37 @@ export default function CursedKingdomGame() {
           styles.stageViewport,
           {
             backgroundColor: currentWorld.bgBottom,
-            borderColor: currentWorld.groundTop,
+            borderColor: hud.lowHealth ? '#ff2a55' : currentWorld.groundTop,
           },
         ]}>
         <View style={styles.ruinsArchBackdrop} />
 
         {p.stoneFlashTimer > 0 && <View style={styles.stoneFlashOverlay} />}
+        {hud.lowHealth && <View style={styles.lowHealthVignette} />}
 
-        {hud.toast ? (
+        {/* BOSS INTRODUCTION OVERLAY WHEN WAVE 3 STARTS */}
+        {hud.bossIntroActive && (
+          <View style={styles.bossIntroModal}>
+            <MonsterArt monsterId={stageBossMonster.id} size={62} />
+            <View style={{ flex: 1 }}>
+              <Text style={styles.bossIntroHeader}>
+                👑 {stageBossMonster.name.toUpperCase()} ({stageBossMonster.difficulty})
+              </Text>
+              <Text style={styles.bossIntroDesc}>
+                {stageBossMonster.bossIntroText}
+              </Text>
+            </View>
+            <Pressable
+              style={styles.bossIntroDismissBtn}
+              onPress={() => {
+                state.bossIntroTimer = 0;
+              }}>
+              <Text style={styles.bossIntroDismissText}>⚔️ FIGHT!</Text>
+            </Pressable>
+          </View>
+        )}
+
+        {hud.toast && !hud.bossIntroActive ? (
           <View style={styles.stageToast}>
             <Text style={styles.stageToastText}>{hud.toast}</Text>
           </View>
@@ -1279,7 +1842,7 @@ export default function CursedKingdomGame() {
           </Text>
         </View>
 
-        {/* Active Wave Gate Barrier (Prevents Bypassing Required Encounters) */}
+        {/* Active Wave Gate Barrier */}
         {!state.allWavesCleared && activeWaveDef && (
           <View
             style={[
@@ -1289,7 +1852,7 @@ export default function CursedKingdomGame() {
           />
         )}
 
-        {/* Collectibles (Coins, Gems, Hearts) */}
+        {/* Collectibles (Coins, Gems, Hearts, Potions) */}
         {state.items.map((it) => {
           if (it.collected) return null;
           const sx = it.x - state.cameraX;
@@ -1299,7 +1862,13 @@ export default function CursedKingdomGame() {
               key={it.id}
               style={{ position: 'absolute', left: sx - 10, top: it.y - 10 }}>
               <Text style={{ fontSize: 16 }}>
-                {it.type === 'coin' ? '🪙' : it.type === 'gem' ? '💎' : '❤️'}
+                {it.type === 'coin'
+                  ? '🪙'
+                  : it.type === 'gem'
+                  ? '💎'
+                  : it.type === 'potion'
+                  ? '🧪'
+                  : '❤️'}
               </Text>
             </View>
           );
@@ -1338,10 +1907,11 @@ export default function CursedKingdomGame() {
           );
         })}
 
-        {/* Level Monsters with AI State & Telegraph Indicators */}
+        {/* Level Monsters with AI State, Individual Health Bars & Telegraph Indicators */}
         {state.enemies.map((e) => {
           const sx = e.x - state.cameraX;
           if (sx < -90 || sx > 900) return null;
+          const ePct = Math.max(0, Math.min(100, (e.hp / e.maxHp) * 100));
           return (
             <View
               key={e.id}
@@ -1353,17 +1923,30 @@ export default function CursedKingdomGame() {
                 height: e.h,
                 alignItems: 'center',
                 justifyContent: 'center',
-                opacity: e.aiState === 'DEAD' ? 0.35 : e.aiState === 'HURT' ? 0.65 : 1,
-                transform: [{ scaleX: e.facing < 0 ? 1 : -1 }],
+                opacity:
+                  e.aiState === 'DEAD' ? 0.35 : e.aiState === 'HURT' ? 0.65 : 1,
               }}>
-              {/* Telegraphed Attack / Detect State Badge */}
+              {/* Mini overhead HP bar above every active monster */}
+              <View style={styles.overheadHpTrack}>
+                <View
+                  style={[
+                    styles.overheadHpFill,
+                    {
+                      width: `${ePct}%`,
+                      backgroundColor: e.isBoss ? '#ff2a55' : '#e63946',
+                    },
+                  ]}
+                />
+              </View>
               {e.aiState === 'PREPARE_ATTACK' && (
                 <Text style={styles.telegraphIcon}>⚠️</Text>
               )}
               {e.aiState === 'DETECT' && (
                 <Text style={styles.telegraphIcon}>❗</Text>
               )}
-              <MonsterArt monsterId={e.monsterId} size={e.w} />
+              <View style={{ transform: [{ scaleX: e.facing < 0 ? 1 : -1 }] }}>
+                <MonsterArt monsterId={e.monsterId} size={e.w} />
+              </View>
             </View>
           );
         })}
@@ -1382,6 +1965,7 @@ export default function CursedKingdomGame() {
           <WarriorArt
             size={48}
             attacking={p.attackTimer > 0}
+            heavyAttacking={p.heavyAttackTimer > 0}
             blocking={p.blocking}
           />
         </View>
@@ -1408,8 +1992,8 @@ export default function CursedKingdomGame() {
 
       {/* BOTTOM ANDROID TOUCH CONTROLS */}
       <View style={styles.circularControlsRow}>
-        {/* Bottom-Left: ( ◀ ) and ( ▶ ) */}
-        <View style={{ flexDirection: 'row', gap: 12 }}>
+        {/* Bottom-Left: Move ( ◀ ) and ( ▶ ) */}
+        <View style={{ flexDirection: 'row', gap: 10 }}>
           <Pressable
             style={styles.roundTouchBtn}
             onPressIn={() => {
@@ -1433,8 +2017,21 @@ export default function CursedKingdomGame() {
           </Pressable>
         </View>
 
-        {/* Bottom-Right: Dodge (💨), Block (🛡️), Skill w/ Cooldown (🌀), Sword (🗡️), Jump (↑) */}
+        {/* Bottom-Right: Potion (🧪), Dodge (💨), Block (🛡️), Skill (🌀), Heavy (⚒️), Attack (🗡️), Jump (↑) */}
         <View style={styles.rightCluster}>
+          <Pressable
+            style={[
+              styles.roundTouchBtnSmall,
+              { borderColor: '#52b788' },
+              hud.potionsLeft <= 0 && { opacity: 0.45 },
+            ]}
+            onPressIn={() => {
+              if (playerUsePotion(state)) vibrate('medium');
+            }}>
+            <Text style={styles.roundBtnSubLabel}>🧪</Text>
+            <Text style={styles.roundBtnTinyText}>x{hud.potionsLeft}</Text>
+          </Pressable>
+
           <Pressable
             style={styles.roundTouchBtnSmall}
             onPressIn={() => {
@@ -1461,16 +2058,26 @@ export default function CursedKingdomGame() {
 
           <Pressable
             style={[
-              styles.roundTouchBtn,
+              styles.roundTouchBtnSmall,
+              { borderColor: '#38e4ae' },
               !skillReady && { opacity: 0.55 },
             ]}
             onPressIn={() => {
               if (playerStoneSkill(state)) vibrate('heavy');
             }}>
-            <Text style={styles.roundBtnIcon}>🌀</Text>
+            <Text style={styles.roundBtnSubLabel}>🌀</Text>
             <Text style={styles.roundBtnTinyText}>
-              {skillReady ? 'READY' : `${skillCooldownSec}s`}
+              {skillReady ? 'SKILL' : `${skillCooldownSec}s`}
             </Text>
+          </Pressable>
+
+          <Pressable
+            style={[styles.roundTouchBtnSmall, { borderColor: '#ff70a6' }]}
+            onPressIn={() => {
+              if (playerHeavyAttack(state)) vibrate('medium');
+            }}>
+            <Text style={styles.roundBtnSubLabel}>⚒️</Text>
+            <Text style={styles.roundBtnTinyText}>HEAVY</Text>
           </Pressable>
 
           <Pressable
@@ -1478,7 +2085,7 @@ export default function CursedKingdomGame() {
             onPressIn={() => {
               if (playerSwordAttack(state)) vibrate('light');
             }}>
-            <Text style={{ fontSize: 22 }}>🗡️</Text>
+            <Text style={{ fontSize: 20 }}>🗡️</Text>
             <Text style={styles.roundBtnTinyText}>C{p.comboStep}</Text>
           </Pressable>
 
@@ -1498,33 +2105,33 @@ export default function CursedKingdomGame() {
 const styles = StyleSheet.create({
   menuScreenBg: {
     flex: 1,
-    backgroundColor: '#1a1026',
+    backgroundColor: '#160d24',
     justifyContent: 'center',
-    padding: 16,
+    padding: 14,
   },
   menuLayout: {
     flexDirection: 'row',
     flexWrap: 'wrap',
     alignItems: 'center',
     justifyContent: 'space-around',
-    gap: 16,
+    gap: 14,
   },
   menuLeftCol: {
     alignItems: 'center',
   },
   crownIcon: {
-    fontSize: 28,
+    fontSize: 26,
     marginBottom: -4,
   },
   logoSmall: {
     color: '#ffd152',
-    fontSize: 13,
+    fontSize: 10,
     fontWeight: '900',
-    letterSpacing: 3,
+    letterSpacing: 2,
   },
   logoMain: {
     color: '#ffdd80',
-    fontSize: 32,
+    fontSize: 30,
     fontWeight: '900',
     textAlign: 'center',
     textShadowColor: '#590d22',
@@ -1532,12 +2139,23 @@ const styles = StyleSheet.create({
     textShadowRadius: 4,
   },
   heroCliffBox: {
-    marginTop: 8,
+    marginTop: 6,
     alignItems: 'center',
   },
+  menuCurrencyPill: {
+    flexDirection: 'row',
+    gap: 12,
+    backgroundColor: '#241734',
+    borderWidth: 1.5,
+    borderColor: '#d4a338',
+    borderRadius: 16,
+    paddingHorizontal: 14,
+    paddingVertical: 5,
+    marginTop: 6,
+  },
   menuRightCol: {
-    width: 270,
-    gap: 8,
+    width: 265,
+    gap: 7,
   },
   ornateMenuBtn: {
     flexDirection: 'row',
@@ -1546,8 +2164,8 @@ const styles = StyleSheet.create({
     borderWidth: 2,
     borderColor: '#b08946',
     borderRadius: 6,
-    paddingVertical: 10,
-    paddingHorizontal: 14,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
     gap: 10,
   },
   ornateMenuBtnPrimary: {
@@ -1562,7 +2180,7 @@ const styles = StyleSheet.create({
   },
   menuBtnLabel: {
     color: '#f8f4e6',
-    fontSize: 15,
+    fontSize: 14,
     fontWeight: '800',
   },
   darkBackdrop: {
@@ -1570,6 +2188,13 @@ const styles = StyleSheet.create({
     backgroundColor: '#0e0b1a',
     alignItems: 'center',
     justifyContent: 'space-between',
+    padding: 10,
+  },
+  gameOverBackdrop: {
+    flex: 1,
+    backgroundColor: '#1f0812',
+    alignItems: 'center',
+    justifyContent: 'center',
     padding: 12,
   },
   topHeaderRow: {
@@ -1577,12 +2202,12 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    marginBottom: 8,
+    marginBottom: 6,
   },
   backCircleBtn: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
+    width: 38,
+    height: 38,
+    borderRadius: 19,
     backgroundColor: '#2b1e16',
     borderWidth: 2,
     borderColor: '#d4a338',
@@ -1591,20 +2216,20 @@ const styles = StyleSheet.create({
   },
   backArrowText: {
     color: '#ffd152',
-    fontSize: 20,
+    fontSize: 18,
     fontWeight: '900',
   },
   goldenRibbon: {
     backgroundColor: '#b88635',
     borderWidth: 2,
     borderColor: '#ffd152',
-    paddingHorizontal: 22,
-    paddingVertical: 6,
+    paddingHorizontal: 18,
+    paddingVertical: 5,
     borderRadius: 4,
   },
   ribbonTitle: {
     color: '#241405',
-    fontSize: 16,
+    fontSize: 15,
     fontWeight: '900',
   },
   unlockAllMiniBtn: {
@@ -1612,7 +2237,7 @@ const styles = StyleSheet.create({
     borderWidth: 1.5,
     borderColor: '#ffd152',
     paddingHorizontal: 10,
-    paddingVertical: 6,
+    paddingVertical: 5,
     borderRadius: 6,
   },
   unlockAllMiniText: {
@@ -1628,7 +2253,7 @@ const styles = StyleSheet.create({
     borderWidth: 4,
     borderColor: '#6e471b',
     borderRadius: 10,
-    padding: 16,
+    padding: 14,
     flexDirection: 'row',
     flexWrap: 'wrap',
     alignItems: 'center',
@@ -1637,16 +2262,16 @@ const styles = StyleSheet.create({
   },
   storyArtBox: {
     flex: 1,
-    minWidth: 190,
+    minWidth: 180,
     backgroundColor: '#2d124d',
     borderWidth: 2,
     borderColor: '#7209b7',
     borderRadius: 8,
-    padding: 12,
+    padding: 10,
     alignItems: 'center',
   },
   castleEmoji: {
-    fontSize: 38,
+    fontSize: 34,
     marginVertical: 4,
   },
   storyTextCol: {
@@ -1656,15 +2281,15 @@ const styles = StyleSheet.create({
   },
   parchmentBody: {
     color: '#2b1908',
-    fontSize: 15,
+    fontSize: 14,
     fontWeight: '700',
-    lineHeight: 22,
+    lineHeight: 20,
   },
   storyFooterRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginTop: 16,
+    marginTop: 12,
   },
   dotsRow: {
     flexDirection: 'row',
@@ -1683,14 +2308,152 @@ const styles = StyleSheet.create({
     backgroundColor: '#6e2614',
     borderWidth: 2,
     borderColor: '#d4a338',
-    paddingHorizontal: 18,
-    paddingVertical: 8,
+    paddingHorizontal: 16,
+    paddingVertical: 7,
     borderRadius: 6,
   },
   parchmentNextText: {
     color: '#ffd152',
     fontWeight: '900',
+    fontSize: 13,
+  },
+  // Armory / Warrior Upgrades UI
+  armoryHeroBanner: {
+    width: '98%',
+    backgroundColor: '#1c142b',
+    borderWidth: 2,
+    borderColor: '#d4a338',
+    borderRadius: 8,
+    padding: 8,
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 6,
+    gap: 8,
+  },
+  armoryHeroTitle: {
+    color: '#ffd152',
     fontSize: 14,
+    fontWeight: '900',
+  },
+  armoryHeroStats: {
+    color: '#ffffff',
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  buyPotionBtn: {
+    backgroundColor: '#2d6a4f',
+    borderWidth: 1.5,
+    borderColor: '#80ed99',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 6,
+  },
+  buyPotionBtnText: {
+    color: '#ffffff',
+    fontSize: 11,
+    fontWeight: '900',
+  },
+  armoryNoticeText: {
+    color: '#38e4ae',
+    fontSize: 12,
+    fontWeight: '800',
+    marginBottom: 4,
+  },
+  armoryGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'center',
+    gap: 10,
+    paddingBottom: 14,
+  },
+  upgradeCard: {
+    width: 300,
+    backgroundColor: '#191326',
+    borderWidth: 2,
+    borderColor: '#b08946',
+    borderRadius: 8,
+    padding: 10,
+    gap: 6,
+  },
+  upgradeCardHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  upgradeIconBig: {
+    fontSize: 28,
+  },
+  upgradeCatTitle: {
+    color: '#ffd152',
+    fontSize: 13,
+    fontWeight: '900',
+  },
+  upgradeEquippedName: {
+    color: '#ffffff',
+    fontSize: 11,
+    fontWeight: '800',
+  },
+  upgradeBonusText: {
+    color: '#38e4ae',
+    fontSize: 10,
+    fontWeight: '700',
+  },
+  tierBarsRow: {
+    flexDirection: 'row',
+    gap: 5,
+    marginVertical: 2,
+  },
+  tierSegment: {
+    flex: 1,
+    height: 6,
+    backgroundColor: '#342846',
+    borderRadius: 3,
+  },
+  tierSegmentFilled: {
+    backgroundColor: '#ffd152',
+  },
+  upgradeActionRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginTop: 2,
+  },
+  nextTierLabel: {
+    color: '#ced4da',
+    fontSize: 10,
+    fontWeight: '700',
+  },
+  nextTierBonus: {
+    color: '#ffd152',
+    fontSize: 10,
+    fontWeight: '800',
+  },
+  upgradeBuyBtn: {
+    backgroundColor: '#9e3b18',
+    borderWidth: 1.5,
+    borderColor: '#ffd152',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 5,
+  },
+  upgradeBuyBtnDisabled: {
+    backgroundColor: '#343a40',
+    borderColor: '#6c757d',
+    opacity: 0.65,
+  },
+  upgradeBuyBtnText: {
+    color: '#ffffff',
+    fontSize: 11,
+    fontWeight: '900',
+  },
+  maxTierBadge: {
+    color: '#ffd152',
+    fontSize: 11,
+    fontWeight: '900',
+    textAlign: 'center',
+    marginTop: 4,
   },
   worldsHorizontalRow: {
     alignItems: 'center',
@@ -1698,8 +2461,8 @@ const styles = StyleSheet.create({
     paddingHorizontal: 8,
   },
   worldPillarCard: {
-    width: 140,
-    height: 250,
+    width: 145,
+    height: 255,
     borderWidth: 3,
     borderRadius: 10,
     padding: 10,
@@ -1709,23 +2472,33 @@ const styles = StyleSheet.create({
   worldBadgeEmoji: {
     fontSize: 22,
   },
+  worldDiffBadge: {
+    color: '#ffd152',
+    fontSize: 10,
+    fontWeight: '900',
+  },
   worldPillarArt: {
-    marginVertical: 8,
+    marginVertical: 4,
   },
   worldPillarTitle: {
     color: '#ffffff',
-    fontSize: 14,
+    fontSize: 13,
     fontWeight: '900',
     textAlign: 'center',
   },
   worldPillarRange: {
     color: '#ffd152',
-    fontSize: 12,
+    fontSize: 11,
+    fontWeight: '800',
+  },
+  worldStatusTag: {
+    color: '#38e4ae',
+    fontSize: 10,
     fontWeight: '800',
   },
   worldSubHeader: {
     color: '#ffd152',
-    fontSize: 15,
+    fontSize: 13,
     fontWeight: '800',
     marginBottom: 4,
   },
@@ -1735,7 +2508,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10,
   },
   levelSquareCard: {
-    width: 195,
+    width: 205,
     backgroundColor: '#1a1528',
     borderWidth: 3,
     borderColor: '#6c584c',
@@ -1748,23 +2521,23 @@ const styles = StyleSheet.create({
   },
   levelPreviewBox: {
     width: '100%',
-    height: 110,
+    height: 105,
     borderRadius: 6,
     borderWidth: 2,
     borderColor: '#495057',
     alignItems: 'center',
     justifyContent: 'center',
-    marginBottom: 8,
+    marginBottom: 6,
   },
   levelMonsterTag: {
     color: '#ffffff',
-    fontSize: 12,
+    fontSize: 11,
     fontWeight: '800',
     marginTop: 2,
   },
   levelCardTitle: {
     color: '#f8f4e6',
-    fontSize: 14,
+    fontSize: 13,
     fontWeight: '900',
     textAlign: 'center',
   },
@@ -1777,7 +2550,7 @@ const styles = StyleSheet.create({
   },
   monsterLvText: {
     color: '#ffd152',
-    fontSize: 11,
+    fontSize: 10,
     fontWeight: '800',
   },
   monsterHeartsText: {
@@ -1786,12 +2559,12 @@ const styles = StyleSheet.create({
   levelCardFooter: {
     width: '100%',
     alignItems: 'center',
-    marginTop: 6,
-    gap: 6,
+    marginTop: 4,
+    gap: 4,
   },
   goldStarsText: {
     color: '#ffd152',
-    fontSize: 20,
+    fontSize: 18,
   },
   playLevelBtn: {
     backgroundColor: '#9e3b18',
@@ -1816,45 +2589,45 @@ const styles = StyleSheet.create({
   },
   lockIconText: {
     color: '#adb5bd',
-    fontSize: 15,
+    fontSize: 14,
     fontWeight: '800',
-    marginTop: 10,
+    marginTop: 8,
   },
   planWorldBox: {
     borderWidth: 2,
     borderRadius: 10,
     padding: 10,
-    marginBottom: 12,
+    marginBottom: 10,
     backgroundColor: '#141024',
   },
   planWorldHeader: {
-    fontSize: 15,
+    fontSize: 14,
     fontWeight: '900',
-    marginBottom: 8,
+    marginBottom: 6,
   },
   planLevelCard: {
-    width: 155,
+    width: 165,
     borderWidth: 2,
-    borderColor: '#d4a338',
     borderRadius: 8,
     padding: 8,
     alignItems: 'center',
   },
   planLevelNum: {
     color: '#ffd152',
-    fontSize: 13,
+    fontSize: 12,
     fontWeight: '900',
   },
   planLevelSub: {
     color: '#ffffff',
-    fontSize: 11,
+    fontSize: 10,
     fontWeight: '700',
     textAlign: 'center',
   },
   planMonsterName: {
     color: '#f8f4e6',
-    fontSize: 12,
+    fontSize: 11,
     fontWeight: '900',
+    textAlign: 'center',
   },
   galleryGrid: {
     flexDirection: 'row',
@@ -1864,7 +2637,7 @@ const styles = StyleSheet.create({
     paddingBottom: 16,
   },
   galleryItemCard: {
-    width: 125,
+    width: 132,
     backgroundColor: '#18122b',
     borderWidth: 2,
     borderRadius: 8,
@@ -1883,94 +2656,98 @@ const styles = StyleSheet.create({
     fontSize: 10,
     marginTop: 2,
   },
+  galleryStatusBadge: {
+    fontSize: 10,
+    fontWeight: '900',
+    marginTop: 2,
+  },
   monsterDetailFrame: {
     flex: 1,
     width: '96%',
-    maxWidth: 620,
+    maxWidth: 640,
     backgroundColor: '#13192b',
     borderWidth: 3,
     borderRadius: 12,
-    padding: 14,
+    padding: 12,
     justifyContent: 'space-between',
   },
   monsterDetailTopRow: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    gap: 14,
+    gap: 12,
     alignItems: 'center',
   },
   monsterDetailPortrait: {
     flex: 1,
-    minWidth: 150,
+    minWidth: 140,
     backgroundColor: '#0b2138',
     borderWidth: 2,
     borderColor: '#48cae4',
     borderRadius: 10,
-    padding: 12,
+    padding: 10,
     alignItems: 'center',
   },
   monsterStatsCol: {
-    flex: 1.3,
-    minWidth: 200,
-    gap: 6,
+    flex: 1.5,
+    minWidth: 210,
+    gap: 4,
   },
   monsterRibbonBanner: {
     backgroundColor: '#7f3918',
     borderWidth: 2,
     borderColor: '#ffd152',
-    paddingVertical: 5,
-    paddingHorizontal: 12,
+    paddingVertical: 4,
+    paddingHorizontal: 10,
     borderRadius: 6,
-    marginBottom: 4,
   },
   monsterRibbonText: {
     color: '#ffffff',
-    fontSize: 16,
+    fontSize: 15,
     fontWeight: '900',
     textAlign: 'center',
+  },
+  monsterLoreDesc: {
+    color: '#ced4da',
+    fontSize: 11,
+    lineHeight: 15,
+    marginVertical: 2,
   },
   statLine: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     borderBottomWidth: 1,
     borderBottomColor: '#2b3a55',
-    paddingVertical: 4,
+    paddingVertical: 3,
   },
   statLabel: {
     color: '#b5a8c9',
-    fontSize: 14,
+    fontSize: 12,
     fontWeight: '700',
   },
   statNumber: {
     color: '#ffffff',
-    fontSize: 14,
+    fontSize: 12,
     fontWeight: '900',
-  },
-  abilitiesTitle: {
-    color: '#ffd152',
-    fontSize: 13,
-    fontWeight: '900',
-    textAlign: 'center',
-    marginTop: 8,
   },
   abilitiesRow: {
     flexDirection: 'row',
     justifyContent: 'space-around',
     gap: 8,
+    marginTop: 6,
   },
   abilityBox: {
     flex: 1,
     backgroundColor: '#1a243b',
     borderWidth: 1.5,
     borderRadius: 8,
-    padding: 8,
+    padding: 6,
     alignItems: 'center',
   },
   abilityNameText: {
     color: '#ffffff',
-    fontSize: 11,
+    fontSize: 10,
     fontWeight: '800',
-    marginTop: 4,
+    marginTop: 2,
     textAlign: 'center',
   },
   settingsFrame: {
@@ -1986,7 +2763,7 @@ const styles = StyleSheet.create({
     gap: 14,
   },
   settingsSidebar: {
-    width: 135,
+    width: 130,
     gap: 8,
   },
   settingsTabBtn: {
@@ -1994,7 +2771,7 @@ const styles = StyleSheet.create({
     borderWidth: 1.5,
     borderColor: '#7a5c38',
     borderRadius: 6,
-    paddingVertical: 9,
+    paddingVertical: 8,
     paddingHorizontal: 10,
   },
   settingsTabBtnActive: {
@@ -2008,12 +2785,18 @@ const styles = StyleSheet.create({
   },
   settingsContentCol: {
     flex: 1,
-    gap: 10,
+    gap: 8,
   },
   settingsHeading: {
     color: '#ffd152',
     fontSize: 15,
     fontWeight: '900',
+  },
+  controlsHelpText: {
+    color: '#f8f4e6',
+    fontSize: 12,
+    lineHeight: 18,
+    fontWeight: '600',
   },
   settingControlRow: {
     flexDirection: 'row',
@@ -2023,9 +2806,9 @@ const styles = StyleSheet.create({
   },
   settingControlLabel: {
     color: '#f8f4e6',
-    fontSize: 13,
+    fontSize: 12,
     fontWeight: '700',
-    width: 115,
+    width: 125,
   },
   sliderTrack: {
     flex: 1,
@@ -2046,12 +2829,12 @@ const styles = StyleSheet.create({
     textAlign: 'right',
   },
   pausedDialog: {
-    width: 320,
+    width: 330,
     backgroundColor: '#1e1526',
     borderWidth: 3,
     borderColor: '#d4a338',
     borderRadius: 12,
-    padding: 18,
+    padding: 16,
     alignItems: 'center',
   },
   levelCompleteLayout: {
@@ -2059,33 +2842,52 @@ const styles = StyleSheet.create({
     flexWrap: 'wrap',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 18,
+    gap: 16,
   },
   completeHeroCol: {
     alignItems: 'center',
   },
+  defeatedTagText: {
+    color: '#38e4ae',
+    fontSize: 12,
+    fontWeight: '900',
+    marginTop: 6,
+  },
+  gameOverSubText: {
+    color: '#ff4d6d',
+    fontSize: 12,
+    fontWeight: '900',
+    marginTop: 4,
+  },
   completeBox: {
-    width: 340,
+    width: 365,
     backgroundColor: '#211624',
     borderWidth: 3,
     borderColor: '#d4a338',
     borderRadius: 12,
-    padding: 16,
+    padding: 14,
     alignItems: 'center',
   },
   bigThreeStars: {
     color: '#ffd152',
-    fontSize: 38,
-    marginTop: -28,
+    fontSize: 34,
+    marginTop: -24,
   },
   redVictoryRibbon: {
     backgroundColor: '#9e1f32',
     borderWidth: 2,
     borderColor: '#ffd152',
-    paddingHorizontal: 22,
-    paddingVertical: 6,
+    paddingHorizontal: 18,
+    paddingVertical: 5,
     borderRadius: 6,
-    marginVertical: 8,
+    marginVertical: 6,
+  },
+  clearNoteText: {
+    color: '#ced4da',
+    fontSize: 11,
+    textAlign: 'center',
+    lineHeight: 16,
+    marginBottom: 4,
   },
   completeStatsPanel: {
     width: '100%',
@@ -2093,9 +2895,9 @@ const styles = StyleSheet.create({
     borderWidth: 1.5,
     borderColor: '#6e4e2e',
     borderRadius: 8,
-    padding: 10,
-    gap: 8,
-    marginVertical: 8,
+    padding: 9,
+    gap: 6,
+    marginVertical: 6,
   },
   completeStatRow: {
     flexDirection: 'row',
@@ -2103,38 +2905,40 @@ const styles = StyleSheet.create({
   },
   completeStatLabel: {
     color: '#f8f4e6',
-    fontSize: 13,
+    fontSize: 12,
     fontWeight: '700',
   },
   completeStatVal: {
     color: '#ffd152',
-    fontSize: 13,
+    fontSize: 12,
     fontWeight: '900',
   },
   completeBtnsRow: {
     flexDirection: 'row',
-    gap: 10,
+    flexWrap: 'wrap',
+    justifyContent: 'center',
+    gap: 8,
     marginTop: 6,
   },
   retryBtn: {
     backgroundColor: '#382942',
     borderWidth: 2,
     borderColor: '#b08946',
-    paddingHorizontal: 16,
-    paddingVertical: 9,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
     borderRadius: 6,
   },
   nextLevelGoldBtn: {
     backgroundColor: '#d49b27',
     borderWidth: 2,
     borderColor: '#fff3b0',
-    paddingHorizontal: 18,
-    paddingVertical: 9,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
     borderRadius: 6,
   },
   nextLevelGoldText: {
     color: '#241405',
-    fontSize: 14,
+    fontSize: 13,
     fontWeight: '900',
   },
   endingSunlitBg: {
@@ -2166,7 +2970,7 @@ const styles = StyleSheet.create({
   gameplayWrapper: {
     flex: 1,
     justifyContent: 'space-between',
-    padding: 8,
+    padding: 6,
   },
   hudTopContainer: {
     flexDirection: 'row',
@@ -2177,12 +2981,12 @@ const styles = StyleSheet.create({
   heroHudLeft: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
+    gap: 7,
   },
   heroAvatarCircle: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
+    width: 46,
+    height: 46,
+    borderRadius: 23,
     backgroundColor: '#2b1d38',
     borderWidth: 2.5,
     borderColor: '#ffd152',
@@ -2201,8 +3005,14 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     marginLeft: 4,
   },
+  lowHpWarningBadge: {
+    color: '#ff2a55',
+    fontSize: 9,
+    fontWeight: '900',
+    marginLeft: 4,
+  },
   greenBarTrack: {
-    width: 115,
+    width: 118,
     height: 9,
     backgroundColor: '#1f2421',
     borderWidth: 1.5,
@@ -2221,12 +3031,11 @@ const styles = StyleSheet.create({
   },
   heroLvBadgeText: {
     color: '#ffd152',
-    fontSize: 10,
+    fontSize: 9,
     fontWeight: '900',
-    marginTop: 2,
   },
   waveCounterPill: {
-    backgroundColor: 'rgba(20, 14, 34, 0.9)',
+    backgroundColor: 'rgba(20, 14, 34, 0.92)',
     borderWidth: 1.5,
     borderColor: '#ffd152',
     borderRadius: 8,
@@ -2234,15 +3043,16 @@ const styles = StyleSheet.create({
     paddingVertical: 4,
     alignItems: 'center',
   },
-  waveTitleText: {
-    color: '#ffd152',
-    fontSize: 11,
-    fontWeight: '900',
-  },
-  waveSubText: {
+  levelHudTitleText: {
     color: '#ffffff',
     fontSize: 10,
-    fontWeight: '700',
+    fontWeight: '900',
+  },
+  waveTitleText: {
+    color: '#ffd152',
+    fontSize: 10,
+    fontWeight: '800',
+    marginTop: 1,
   },
   hudTopRightCol: {
     alignItems: 'flex-end',
@@ -2251,17 +3061,17 @@ const styles = StyleSheet.create({
   currencyRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 10,
+    gap: 8,
   },
   currencyItem: {
     color: '#ffffff',
-    fontSize: 13,
+    fontSize: 12,
     fontWeight: '900',
   },
   pauseCircleBtn: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
+    width: 30,
+    height: 30,
+    borderRadius: 15,
     backgroundColor: '#2b1e16',
     borderWidth: 2,
     borderColor: '#ffd152',
@@ -2270,25 +3080,25 @@ const styles = StyleSheet.create({
   },
   pauseCircleText: {
     color: '#ffd152',
-    fontSize: 12,
+    fontSize: 11,
     fontWeight: '900',
   },
   enemyHudFrame: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: 'rgba(20, 14, 32, 0.92)',
+    backgroundColor: 'rgba(20, 14, 32, 0.94)',
     borderWidth: 2,
     borderColor: '#d4a338',
-    borderRadius: 14,
+    borderRadius: 12,
     paddingHorizontal: 8,
-    paddingVertical: 4,
-    width: 195,
+    paddingVertical: 3,
+    width: 190,
     gap: 6,
   },
   enemyEmblemCircle: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
+    width: 26,
+    height: 26,
+    borderRadius: 13,
     backgroundColor: '#2d3a2e',
     borderWidth: 1.5,
     borderColor: '#ffd152',
@@ -2297,8 +3107,8 @@ const styles = StyleSheet.create({
   },
   enemyHudName: {
     color: '#ffffff',
-    fontSize: 10,
-    fontWeight: '800',
+    fontSize: 9,
+    fontWeight: '900',
   },
   enemyRedTrack: {
     width: '100%',
@@ -2316,7 +3126,7 @@ const styles = StyleSheet.create({
   },
   enemyHpNumText: {
     color: '#ffccd5',
-    fontSize: 9,
+    fontSize: 8,
     fontWeight: '700',
     marginTop: 1,
   },
@@ -2325,11 +3135,25 @@ const styles = StyleSheet.create({
     borderWidth: 1.5,
     borderColor: '#ffd152',
     borderRadius: 6,
-    paddingVertical: 3,
+    paddingVertical: 2,
     paddingHorizontal: 10,
     alignSelf: 'center',
   },
   bossWarningText: {
+    color: '#ffd152',
+    fontSize: 10,
+    fontWeight: '900',
+  },
+  bossDefeatedBanner: {
+    backgroundColor: 'rgba(45, 106, 79, 0.95)',
+    borderWidth: 1.5,
+    borderColor: '#ffd152',
+    borderRadius: 6,
+    paddingVertical: 3,
+    paddingHorizontal: 12,
+    alignSelf: 'center',
+  },
+  bossDefeatedBannerText: {
     color: '#ffd152',
     fontSize: 11,
     fontWeight: '900',
@@ -2360,6 +3184,55 @@ const styles = StyleSheet.create({
     bottom: 0,
     backgroundColor: 'rgba(56, 228, 174, 0.3)',
     zIndex: 12,
+  },
+  lowHealthVignette: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    borderWidth: 4,
+    borderColor: 'rgba(255, 42, 85, 0.65)',
+    zIndex: 11,
+  },
+  bossIntroModal: {
+    position: 'absolute',
+    top: 8,
+    left: 16,
+    right: 16,
+    backgroundColor: 'rgba(22, 10, 38, 0.96)',
+    borderWidth: 2,
+    borderColor: '#ff2a55',
+    borderRadius: 10,
+    padding: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    zIndex: 25,
+  },
+  bossIntroHeader: {
+    color: '#ffd152',
+    fontSize: 12,
+    fontWeight: '900',
+  },
+  bossIntroDesc: {
+    color: '#ffffff',
+    fontSize: 10,
+    fontWeight: '700',
+    marginTop: 2,
+  },
+  bossIntroDismissBtn: {
+    backgroundColor: '#9e1f32',
+    borderWidth: 1.5,
+    borderColor: '#ffd152',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 6,
+  },
+  bossIntroDismissText: {
+    color: '#ffd152',
+    fontSize: 10,
+    fontWeight: '900',
   },
   stageToast: {
     position: 'absolute',
@@ -2398,13 +3271,23 @@ const styles = StyleSheet.create({
     width: 4,
     backgroundColor: 'rgba(247, 37, 133, 0.65)',
   },
+  overheadHpTrack: {
+    width: 34,
+    height: 4,
+    backgroundColor: '#2b1218',
+    borderRadius: 2,
+    marginBottom: 2,
+    overflow: 'hidden',
+  },
+  overheadHpFill: {
+    height: '100%',
+  },
   telegraphIcon: {
-    position: 'absolute',
-    top: -16,
-    fontSize: 14,
+    fontSize: 12,
+    marginBottom: -2,
   },
   damageFloatText: {
-    fontSize: 11,
+    fontSize: 12,
     fontWeight: '900',
     textShadowColor: '#000000',
     textShadowOffset: { width: 1, height: 1 },
@@ -2414,48 +3297,46 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    paddingHorizontal: 6,
-  },
-  roundTouchBtn: {
-    width: 54,
-    height: 54,
-    borderRadius: 27,
-    backgroundColor: 'rgba(20, 24, 38, 0.82)',
-    borderWidth: 2,
-    borderColor: 'rgba(255, 255, 255, 0.45)',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  roundTouchBtnSmall: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
-    backgroundColor: 'rgba(28, 34, 54, 0.82)',
-    borderWidth: 1.5,
-    borderColor: 'rgba(255, 209, 82, 0.65)',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  roundSwordBtn: {
-    width: 62,
-    height: 62,
-    borderRadius: 31,
-    borderColor: '#ffd152',
-    backgroundColor: 'rgba(138, 24, 52, 0.88)',
-  },
-  roundJumpBtn: {
-    width: 52,
-    height: 52,
-    borderRadius: 26,
+    paddingHorizontal: 4,
   },
   rightCluster: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
+    gap: 6,
+  },
+  roundTouchBtn: {
+    width: 50,
+    height: 50,
+    borderRadius: 25,
+    backgroundColor: 'rgba(28, 22, 42, 0.92)',
+    borderWidth: 2,
+    borderColor: '#9c89b8',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  roundTouchBtnSmall: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    backgroundColor: 'rgba(28, 22, 42, 0.92)',
+    borderWidth: 2,
+    borderColor: '#9c89b8',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  roundSwordBtn: {
+    width: 54,
+    height: 54,
+    borderRadius: 27,
+    backgroundColor: 'rgba(158, 59, 24, 0.92)',
+    borderColor: '#ffd152',
+  },
+  roundJumpBtn: {
+    borderColor: '#ffd152',
   },
   roundBtnIcon: {
     color: '#ffffff',
-    fontSize: 19,
+    fontSize: 18,
     fontWeight: '900',
   },
   roundBtnSubLabel: {

@@ -14,6 +14,20 @@ import {
 export const STAGE_HEIGHT = 250;
 export const GROUND_Y = 204;
 
+export interface PlayerUpgrades {
+  weapon: number; // 1..5
+  armor: number;  // 1..5
+  health: number; // 1..5
+  skill: number;  // 1..5
+}
+
+export const DEFAULT_UPGRADES: PlayerUpgrades = {
+  weapon: 1,
+  armor: 1,
+  health: 1,
+  skill: 1,
+};
+
 export interface DamageIndicator {
   id: string;
   x: number;
@@ -34,6 +48,7 @@ export interface EnemyProjectile {
   damage: number;
   color: string;
   ownerId: string;
+  effect?: 'poison' | 'freeze' | 'fire';
 }
 
 export interface ActiveEnemy {
@@ -68,6 +83,7 @@ export interface ActiveEnemy {
   isBoss: boolean;
   bossPhase: 1 | 2;
   shieldActive: boolean;
+  guardBroken: boolean;
   escapeThreshold: number;
   telegraphAbilityName: string;
 }
@@ -76,7 +92,7 @@ export interface CollectibleItem {
   id: string;
   x: number;
   y: number;
-  type: 'coin' | 'gem' | 'heart';
+  type: 'coin' | 'gem' | 'heart' | 'potion';
   collected: boolean;
 }
 
@@ -98,17 +114,22 @@ export interface PlayerEntity {
   maxStamina: number;
   defense: number;
   baseSwordDamage: number;
+  skillDamageMult: number;
   comboStep: 1 | 2 | 3;
   comboWindowTimer: number;
   attackTimer: number;
+  heavyAttackTimer: number;
   attackCooldown: number;
   blocking: boolean;
   dodgeTimer: number;
   dodgeCooldown: number;
   skillCooldown: number; // frames remaining (0 = ready)
   skillMaxCooldown: number;
+  potionCooldown: number;
   stoneFlashTimer: number;
   invulnTimer: number;
+  poisonTimer: number;
+  rootTimer: number;
 }
 
 export interface EngineState {
@@ -122,6 +143,7 @@ export interface EngineState {
     block: boolean;
   };
   player: PlayerEntity;
+  potionsLeft: number;
   platforms: { x: number; y: number; w: number; h: number }[];
   enemies: ActiveEnemy[];
   projectiles: EnemyProjectile[];
@@ -137,6 +159,9 @@ export interface EngineState {
   gemsCollected: number;
   enemiesDefeated: number;
   bossWarningText: string;
+  bossIntroTimer: number;
+  bossDefeatedTimer: number;
+  bossDefeatedName: string;
   toastText: string;
   dialogueSpeaker: string;
   dialogueText: string;
@@ -149,14 +174,25 @@ function nextUid(prefix: string): string {
   return `${prefix}_${uidCounter}`;
 }
 
-export function computePlayerMaxHp(levelNum: number): number {
-  // Balanced Warrior HP: 120 at Lv 1 up to 216 at Lv 13
-  return 120 + (levelNum - 1) * 8;
+const WEAPON_BONUS = [0, 6, 13, 21, 30];
+const ARMOR_BONUS = [0, 4, 9, 15, 22];
+const HEALTH_BONUS = [0, 25, 55, 90, 135];
+const SKILL_MULT = [2.2, 2.53, 2.86, 3.3, 3.85];
+const SKILL_COOLDOWN = [240, 216, 192, 168, 144];
+
+export function computePlayerMaxHp(levelNum: number, healthTier = 1): number {
+  const tierIdx = Math.max(0, Math.min(4, healthTier - 1));
+  return 120 + (levelNum - 1) * 8 + HEALTH_BONUS[tierIdx];
 }
 
-export function computePlayerSwordDamage(levelNum: number): number {
-  // Balanced Sword Damage: 28 at Lv 1 up to 64 at Lv 13
-  return 28 + (levelNum - 1) * 3;
+export function computePlayerSwordDamage(levelNum: number, weaponTier = 1): number {
+  const tierIdx = Math.max(0, Math.min(4, weaponTier - 1));
+  return 28 + (levelNum - 1) * 3 + WEAPON_BONUS[tierIdx];
+}
+
+export function computePlayerDefense(levelNum: number, armorTier = 1): number {
+  const tierIdx = Math.max(0, Math.min(4, armorTier - 1));
+  return 4 + Math.floor(levelNum / 2) + ARMOR_BONUS[tierIdx];
 }
 
 export function createEnemyFromMonster(
@@ -168,8 +204,8 @@ export function createEnemyFromMonster(
   const cfg = MONSTERS_DATA[monsterId];
   const isBoss = isBossOverride || cfg.isBoss;
   const maxHp = isBoss ? cfg.combatHp : cfg.minionHp;
-  const size = isBoss ? Math.round(52 * Math.min(1.25, cfg.scale)) : 44;
-  const isFlying = monsterId === 'cave_bat';
+  const size = isBoss ? Math.round(54 * Math.min(1.28, cfg.scale)) : 44;
+  const isFlying = Boolean(cfg.isFlying);
 
   return {
     id: nextUid(monsterId),
@@ -177,7 +213,7 @@ export function createEnemyFromMonster(
     name: cfg.name,
     waveIndex,
     x,
-    y: isFlying ? 132 : GROUND_Y - size,
+    y: isFlying ? 128 : GROUND_Y - size,
     startX: x,
     w: size,
     h: size,
@@ -203,15 +239,22 @@ export function createEnemyFromMonster(
     isBoss,
     bossPhase: 1,
     shieldActive: Boolean(isBoss && cfg.needsStone),
+    guardBroken: false,
     escapeThreshold: isBoss ? cfg.escapeThreshold || 0 : 0,
     telegraphAbilityName: cfg.abilities[0].name,
   };
 }
 
-export function createInitialEngineState(levelNumber: number): EngineState {
+export function createInitialEngineState(
+  levelNumber: number,
+  upgrades: PlayerUpgrades = DEFAULT_UPGRADES,
+  initialPotions = 3
+): EngineState {
   const lvl = LEVELS_DATA.find((l) => l.level === levelNumber) || LEVELS_DATA[0];
-  const maxHp = computePlayerMaxHp(lvl.level);
-  const baseSword = computePlayerSwordDamage(lvl.level);
+  const maxHp = computePlayerMaxHp(lvl.level, upgrades.health);
+  const baseSword = computePlayerSwordDamage(lvl.level, upgrades.weapon);
+  const defense = computePlayerDefense(lvl.level, upgrades.armor);
+  const skillTierIdx = Math.max(0, Math.min(4, upgrades.skill - 1));
 
   const platforms: { x: number; y: number; w: number; h: number }[] = [];
   const items: CollectibleItem[] = [];
@@ -224,12 +267,13 @@ export function createInitialEngineState(levelNumber: number): EngineState {
     items.push({ id: `coin_${i}_b`, x: px + 60, y: py - 24, type: 'coin', collected: false });
     if (i <= lvl.gemsInLevel) {
       items.push({ id: `gem_${i}`, x: px + 88, y: py - 26, type: 'gem', collected: false });
+    } else if (i % 3 === 0) {
+      items.push({ id: `potion_${i}`, x: px + 88, y: py - 24, type: 'potion', collected: false });
     } else if (i % 2 === 0) {
       items.push({ id: `heart_${i}`, x: px + 88, y: py - 24, type: 'heart', collected: false });
     }
   }
 
-  // Spawn Wave 1 enemies initially; subsequent waves spawn as waves progress
   const firstWave = lvl.waves[0];
   const enemies: ActiveEnemy[] = firstWave
     ? firstWave.spawns.map((s) =>
@@ -259,20 +303,26 @@ export function createInitialEngineState(levelNumber: number): EngineState {
       maxHp,
       stamina: 100,
       maxStamina: 100,
-      defense: 4 + Math.floor(lvl.level / 2),
+      defense,
       baseSwordDamage: baseSword,
+      skillDamageMult: SKILL_MULT[skillTierIdx],
       comboStep: 1,
       comboWindowTimer: 0,
       attackTimer: 0,
+      heavyAttackTimer: 0,
       attackCooldown: 0,
       blocking: false,
       dodgeTimer: 0,
       dodgeCooldown: 0,
       skillCooldown: 0,
-      skillMaxCooldown: 240, // 4 seconds at 60fps
+      skillMaxCooldown: SKILL_COOLDOWN[skillTierIdx],
+      potionCooldown: 0,
       stoneFlashTimer: 0,
       invulnTimer: 0,
+      poisonTimer: 0,
+      rootTimer: 0,
     },
+    potionsLeft: initialPotions,
     platforms,
     enemies,
     projectiles: [],
@@ -288,7 +338,10 @@ export function createInitialEngineState(levelNumber: number): EngineState {
     gemsCollected: 0,
     enemiesDefeated: 0,
     bossWarningText: '',
-    toastText: `WAVE 1/${lvl.waves.length} — DEFEAT ALL FOES TO ADVANCE!`,
+    bossIntroTimer: 0,
+    bossDefeatedTimer: 0,
+    bossDefeatedName: '',
+    toastText: `WAVE 1/${lvl.waves.length} — ${lvl.objective.toUpperCase()}`,
     dialogueSpeaker: lvl.introSpeaker,
     dialogueText: lvl.introDialogue,
     outcome: 'NONE',
@@ -317,6 +370,10 @@ export function addDamageIndicator(
 export function playerJump(state: EngineState): boolean {
   if (!state.running || state.outcome !== 'NONE') return false;
   const p = state.player;
+  if (p.rootTimer > 0) {
+    state.toastText = 'TRAPPED BY ROOTS! DODGE OR WAIT TO BREAK FREE!';
+    return false;
+  }
   if (p.jumpsLeft > 0 && p.stamina >= 8) {
     p.vy = p.jumpForce;
     p.jumpsLeft -= 1;
@@ -327,7 +384,7 @@ export function playerJump(state: EngineState): boolean {
   return false;
 }
 
-// Player Dodge Roll Action (with i-frames & stamina cost)
+// Player Dodge Roll Action (with i-frames, root escape & stamina cost)
 export function playerDodge(state: EngineState): boolean {
   if (!state.running || state.outcome !== 'NONE') return false;
   const p = state.player;
@@ -338,6 +395,7 @@ export function playerDodge(state: EngineState): boolean {
     return false;
   }
   p.stamina -= 22;
+  p.rootTimer = 0; // Dodge breaks root snares
   p.dodgeTimer = 16;
   p.dodgeCooldown = 36;
   p.vx = p.facing * 8.2;
@@ -345,7 +403,32 @@ export function playerDodge(state: EngineState): boolean {
   return true;
 }
 
-// Player Balanced Sword Combo Action
+// Player Healing Potion Usage
+export function playerUsePotion(state: EngineState): boolean {
+  if (!state.running || state.outcome !== 'NONE') return false;
+  const p = state.player;
+  if (p.potionCooldown > 0) return false;
+  if (state.potionsLeft <= 0) {
+    state.toastText = 'NO POTIONS LEFT! COLLECT OR BUY MORE IN ARMORY!';
+    return false;
+  }
+  if (p.hp >= p.maxHp && p.poisonTimer <= 0) {
+    state.toastText = 'HEALTH IS ALREADY FULL!';
+    return false;
+  }
+
+  state.potionsLeft -= 1;
+  p.potionCooldown = 45;
+  p.poisonTimer = 0;
+  p.rootTimer = 0;
+  const healAmount = Math.max(55, Math.round(p.maxHp * 0.45));
+  p.hp = Math.min(p.maxHp, p.hp + healAmount);
+  state.toastText = `USED HEALING POTION (+${healAmount} HP)!`;
+  addDamageIndicator(state, p.x + p.w / 2, p.y - 10, `+${healAmount} HP 🧪`, '#52b788');
+  return true;
+}
+
+// Player Balanced Sword Combo Action (Light Attack)
 export function playerSwordAttack(state: EngineState): boolean {
   if (!state.running || state.outcome !== 'NONE') return false;
   const p = state.player;
@@ -368,7 +451,7 @@ export function playerSwordAttack(state: EngineState): boolean {
 
   const comboMult = p.comboStep === 3 ? 1.35 : p.comboStep === 2 ? 1.15 : 1.0;
   const rawSwordDmg = Math.round(p.baseSwordDamage * comboMult);
-  const reach = 72;
+  const reach = 74;
 
   for (const e of state.enemies) {
     if (e.aiState === 'DEAD') continue;
@@ -376,17 +459,18 @@ export function playerSwordAttack(state: EngineState): boolean {
     const dy = Math.abs(e.y + e.h / 2 - (p.y + p.h / 2));
     const inFront = p.facing > 0 ? dx >= -14 && dx <= reach : dx <= 14 && dx >= -reach;
 
-    if (inFront && dy < 56) {
+    if (inFront && dy < 64) {
       if (e.shieldActive) {
-        addDamageIndicator(state, e.x + e.w / 2, e.y, 'BARRIER!', '#c77dff');
-        state.toastText = 'CURSE BARRIER ACTIVE! USE ANCIENT STONE SKILL (🌀)!';
+        addDamageIndicator(state, e.x + e.w / 2, e.y, 'DARK SHIELD!', '#c77dff');
+        state.toastText = 'DARK SHIELD ACTIVE! USE ANCIENT STONE SKILL (🌀)!';
         continue;
       }
 
-      // Skeleton Warrior blocks 50% of frontal hits while in IDLE/CHASE unless staggered
+      // Skeleton Knight shield defense reduces light sword damage unless guard is broken
       let defenseMitigation = Math.round(e.defense * 0.65);
-      if (e.monsterId === 'skeleton_warrior' && e.aiState === 'CHASE') {
-        defenseMitigation += 6;
+      if (e.monsterId === 'skeleton_knight' && !e.guardBroken && e.aiState === 'CHASE') {
+        defenseMitigation += 8;
+        addDamageIndicator(state, e.x + e.w / 2, e.y - 18, 'SHIELD GUARD', '#4cc9f0');
       }
 
       const finalDmg = Math.max(8, rawSwordDmg - defenseMitigation);
@@ -405,9 +489,64 @@ export function playerSwordAttack(state: EngineState): boolean {
         e.aiState = 'DEAD';
         e.stateTimer = 18;
       } else if (!e.isBoss || e.aiState !== 'ATTACK') {
-        // Hit reaction / stagger
         e.aiState = 'HURT';
         e.stateTimer = 10;
+      }
+    }
+  }
+
+  return true;
+}
+
+// Player Heavy Attack Action (Guard Breaker + High Impact)
+export function playerHeavyAttack(state: EngineState): boolean {
+  if (!state.running || state.outcome !== 'NONE') return false;
+  const p = state.player;
+  if (p.attackCooldown > 0) return false;
+  if (p.stamina < 20) {
+    state.toastText = 'NEED 20 STAMINA FOR HEAVY CLEAVE!';
+    return false;
+  }
+
+  p.stamina = Math.max(0, p.stamina - 20);
+  p.heavyAttackTimer = 16;
+  p.attackTimer = 16;
+  p.attackCooldown = 24;
+
+  const rawHeavyDmg = Math.round(p.baseSwordDamage * 1.65);
+  const reach = 86;
+
+  for (const e of state.enemies) {
+    if (e.aiState === 'DEAD') continue;
+    const dx = e.x + e.w / 2 - (p.x + p.w / 2);
+    const dy = Math.abs(e.y + e.h / 2 - (p.y + p.h / 2));
+    const inFront = p.facing > 0 ? dx >= -16 && dx <= reach : dx <= 16 && dx >= -reach;
+
+    if (inFront && dy < 70) {
+      if (e.shieldActive) {
+        addDamageIndicator(state, e.x + e.w / 2, e.y, 'DARK SHIELD!', '#c77dff');
+        state.toastText = 'ONLY THE ANCIENT STONE SKILL (🌀) CAN PIERCE THE WITCH SHIELD!';
+        continue;
+      }
+
+      if (e.monsterId === 'skeleton_knight' && !e.guardBroken) {
+        e.guardBroken = true;
+        addDamageIndicator(state, e.x + e.w / 2, e.y - 18, 'GUARD BROKEN!', '#ffd152');
+      }
+
+      const defenseMitigation = Math.round(e.defense * 0.45);
+      const finalDmg = Math.max(14, rawHeavyDmg - defenseMitigation);
+      e.hp = Math.max(0, e.hp - finalDmg);
+      e.x += p.facing * (e.isBoss ? 12 : 22);
+
+      addDamageIndicator(state, e.x + e.w / 2, e.y - 6, `-${finalDmg}!!`, '#ff70a6');
+
+      if (e.hp <= 0) {
+        e.aiState = 'DEAD';
+        e.stateTimer = 18;
+      } else {
+        e.aiState = 'HURT';
+        e.stateTimer = 14;
       }
     }
   }
@@ -432,20 +571,21 @@ export function playerStoneSkill(state: EngineState): boolean {
   p.stamina -= 28;
   p.skillCooldown = p.skillMaxCooldown;
   p.stoneFlashTimer = 16;
+  p.rootTimer = 0;
 
-  // Balanced Stone Skill damage (roughly 2.2x a sword swing)
-  const rawSkillDmg = Math.round(p.baseSwordDamage * 2.2);
+  const rawSkillDmg = Math.round(p.baseSwordDamage * p.skillDamageMult);
 
   for (const e of state.enemies) {
     if (e.aiState === 'DEAD') continue;
     const dist = Math.abs(e.x + e.w / 2 - (p.x + p.w / 2));
-    if (dist <= 195) {
+    if (dist <= 200) {
       if (e.shieldActive) {
         e.shieldActive = false;
-        state.toastText = "ANCIENT STONE SHATTERED THE WITCH'S CURSE BARRIER!";
+        state.toastText = "ANCIENT STONE SHATTERED THE WITCH QUEEN'S DARK SHIELD!";
         addDamageIndicator(state, e.x + e.w / 2, e.y - 16, 'SHIELD BROKEN!', '#38e4ae');
       }
-      const finalDmg = Math.max(14, rawSkillDmg - Math.round(e.defense * 0.4));
+      e.guardBroken = true;
+      const finalDmg = Math.max(16, rawSkillDmg - Math.round(e.defense * 0.4));
       e.hp = Math.max(0, e.hp - finalDmg);
       addDamageIndicator(state, e.x + e.w / 2, e.y - 4, `-${finalDmg} 💎`, '#38e4ae');
 
@@ -465,7 +605,8 @@ export function playerStoneSkill(state: EngineState): boolean {
 export function applyDamageToPlayer(
   state: EngineState,
   rawEnemyAttack: number,
-  sourceX: number
+  sourceX: number,
+  effect?: 'poison' | 'freeze' | 'root' | 'fire'
 ): void {
   const p = state.player;
   if (state.outcome !== 'NONE') return;
@@ -495,6 +636,19 @@ export function applyDamageToPlayer(
     p.invulnTimer = 28;
     p.vx = sourceX > p.x ? -4.5 : 4.5;
     addDamageIndicator(state, p.x + p.w / 2, p.y - 8, `-${mitigated}`, '#ff4d6d');
+
+    if (effect === 'poison') {
+      p.poisonTimer = 180;
+      state.toastText = 'POISONED BY VENOM! USE A POTION (🧪) OR HEAL!';
+      addDamageIndicator(state, p.x + p.w / 2, p.y - 20, 'POISONED!', '#80ed99');
+    } else if (effect === 'root') {
+      p.rootTimer = 45;
+      state.toastText = 'SNARED BY ROOTS! PRESS DODGE (💨) TO BREAK FREE!';
+      addDamageIndicator(state, p.x + p.w / 2, p.y - 20, 'ROOTED!', '#52b788');
+    } else if (effect === 'freeze') {
+      p.stamina = Math.max(0, p.stamina - 16);
+      addDamageIndicator(state, p.x + p.w / 2, p.y - 20, 'FROST CHILL!', '#90e0ef');
+    }
   }
 
   if (p.hp <= 0) {
@@ -508,43 +662,101 @@ function executeMonsterAttackPattern(state: EngineState, e: ActiveEnemy): void {
   const dir = p.x >= e.x ? 1 : -1;
   e.facing = dir;
 
-  // Movement during ATTACK frame window based on distinct monster pattern
   switch (e.attackPattern) {
-    case 'slime_hop':
-      if (e.stateTimer === e.attackFrames - 1) {
-        e.vy = -6.5;
-      }
-      e.x += dir * (e.moveSpeed * 1.6);
+    case 'goblin_rush':
+      e.x += dir * (e.moveSpeed * 1.9);
       break;
 
     case 'wolf_pounce':
-    case 'ice_dash':
-    case 'fire_breath':
-      e.x += dir * (e.moveSpeed * 2.4);
+      if (e.stateTimer === e.attackFrames - 1 && e.y + e.h >= GROUND_Y - 2) {
+        e.vy = -5.8;
+      }
+      e.x += dir * (e.moveSpeed * 2.35);
       break;
 
-    case 'bat_swoop':
-      e.x += dir * (e.moveSpeed * 2.2);
-      e.y = GROUND_Y - e.h - 4;
-      break;
-
-    case 'golem_slam':
-    case 'frost_stomp':
-    case 'knight_cleave':
+    case 'tree_root_smash':
+    case 'golem_freeze':
       e.x += dir * (e.moveSpeed * 1.15);
       break;
 
-    case 'skeleton_combo':
+    case 'skeleton_shield':
       e.x += dir * (e.moveSpeed * 1.7);
       break;
 
-    case 'mage_volley':
-    case 'witch_orb':
-    case 'witch_apocalypse':
-      // Spawn ranged dark/void projectiles on first attack frame
+    case 'assassin_blink':
+      // On first frame of attack, Shadow Assassin blinks behind the warrior
+      if (e.stateTimer === e.attackFrames) {
+        const behindOffset = p.facing > 0 ? -48 : 48;
+        e.x = Math.max(24, Math.min(state.level.length - 60, p.x + behindOffset));
+        e.facing = p.x >= e.x ? 1 : -1;
+        addDamageIndicator(state, e.x + e.w / 2, e.y - 10, 'SHADOW BLINK!', '#c77dff');
+      }
+      e.x += e.facing * (e.moveSpeed * 1.9);
+      break;
+
+    case 'wyvern_aerial':
+    case 'dragon_inferno':
+      e.x += dir * (e.moveSpeed * 2.1);
+      e.y = GROUND_Y - e.h - 6;
+      if (!e.hasDealtDamageThisAttack && e.stateTimer === Math.floor(e.attackFrames / 2)) {
+        state.projectiles.push({
+          id: nextUid('proj'),
+          x: e.x + e.w / 2,
+          y: e.y + e.h * 0.5,
+          vx: dir * 5.2,
+          vy: 0,
+          radius: 9,
+          damage: e.attack,
+          color: e.attackPattern === 'wyvern_aerial' ? '#90e0ef' : '#f77f00',
+          ownerId: e.id,
+          effect: e.attackPattern === 'wyvern_aerial' ? 'freeze' : 'fire',
+        });
+      }
+      break;
+
+    case 'beast_tri_storm':
+      e.x += dir * (e.moveSpeed * 1.65);
+      if (!e.hasDealtDamageThisAttack && e.bossPhase === 2) {
+        state.projectiles.push({
+          id: nextUid('proj'),
+          x: e.x + e.w / 2,
+          y: e.y + e.h * 0.45,
+          vx: dir * 5.4,
+          vy: 0,
+          radius: 10,
+          damage: e.attack,
+          color: '#00b4d8',
+          ownerId: e.id,
+          effect: 'freeze',
+        });
+      }
+      break;
+
+    case 'demon_shockwave':
+      e.x += dir * (e.moveSpeed * 1.35);
+      if (!e.hasDealtDamageThisAttack) {
+        state.projectiles.push({
+          id: nextUid('proj'),
+          x: e.x + e.w / 2,
+          y: GROUND_Y - 14,
+          vx: dir * 5.5,
+          vy: 0,
+          radius: 10,
+          damage: e.attack,
+          color: '#f77f00',
+          ownerId: e.id,
+          effect: 'fire',
+        });
+      }
+      break;
+
+    case 'spider_venom':
+    case 'witch_curse':
+    case 'witch_queen_final':
       if (!e.hasDealtDamageThisAttack) {
         e.hasDealtDamageThisAttack = true;
-        const speed = e.bossPhase === 2 ? 5.8 : 4.6;
+        const speed = e.bossPhase === 2 ? 5.8 : 4.7;
+        const isSpider = e.attackPattern === 'spider_venom';
         state.projectiles.push({
           id: nextUid('proj'),
           x: e.x + e.w / 2,
@@ -553,8 +765,9 @@ function executeMonsterAttackPattern(state: EngineState, e: ActiveEnemy): void {
           vy: 0,
           radius: 9,
           damage: e.attack,
-          color: e.monsterId.includes('witch') ? '#f72585' : '#c77dff',
+          color: isSpider ? '#80ed99' : '#f72585',
           ownerId: e.id,
+          effect: isSpider ? 'poison' : undefined,
         });
       }
       break;
@@ -565,17 +778,23 @@ function executeMonsterAttackPattern(state: EngineState, e: ActiveEnemy): void {
     const dist = Math.abs(p.x + p.w / 2 - (e.x + e.w / 2));
     const dy = Math.abs(p.y + p.h / 2 - (e.y + e.h / 2));
     const effectiveRange =
-      e.attackPattern === 'frost_stomp' || e.attackPattern === 'golem_slam'
+      e.attackPattern === 'tree_root_smash' ||
+      e.attackPattern === 'golem_freeze' ||
+      e.attackPattern === 'beast_tri_storm'
         ? e.attackRange + 18
         : e.attackRange;
 
-    if (dist <= effectiveRange && dy <= 58) {
+    if (dist <= effectiveRange && dy <= 62) {
       e.hasDealtDamageThisAttack = true;
-      applyDamageToPlayer(state, e.attack, e.x);
-      if (e.attackPattern === 'ice_dash' || e.attackPattern === 'frost_stomp') {
-        // Frost chill drains stamina
-        p.stamina = Math.max(0, p.stamina - 15);
-      }
+      const statusEffect =
+        e.attackPattern === 'tree_root_smash'
+          ? 'root'
+          : e.attackPattern === 'golem_freeze' || e.attackPattern === 'beast_tri_storm'
+          ? 'freeze'
+          : e.attackPattern === 'spider_venom'
+          ? 'poison'
+          : undefined;
+      applyDamageToPlayer(state, e.attack, e.x, statusEffect);
     }
   }
 }
@@ -585,23 +804,37 @@ export function stepEngineFrame(state: EngineState, viewportWidth = 640): void {
   const p = state.player;
   const lvl = state.level;
 
-  // 1. Stamina & Cooldown Recovery
+  // 1. Stamina, Status Effects & Cooldown Recovery
   p.blocking = state.controls.block && p.stamina >= 5;
   const staminaRegen = p.blocking ? 0.12 : 0.42;
   p.stamina = Math.min(p.maxStamina, p.stamina + staminaRegen);
 
   if (p.attackTimer > 0) p.attackTimer -= 1;
+  if (p.heavyAttackTimer > 0) p.heavyAttackTimer -= 1;
   if (p.attackCooldown > 0) p.attackCooldown -= 1;
   if (p.comboWindowTimer > 0) p.comboWindowTimer -= 1;
   if (p.dodgeTimer > 0) p.dodgeTimer -= 1;
   if (p.dodgeCooldown > 0) p.dodgeCooldown -= 1;
   if (p.skillCooldown > 0) p.skillCooldown -= 1;
+  if (p.potionCooldown > 0) p.potionCooldown -= 1;
   if (p.stoneFlashTimer > 0) p.stoneFlashTimer -= 1;
   if (p.invulnTimer > 0) p.invulnTimer -= 1;
+  if (p.rootTimer > 0) p.rootTimer -= 1;
+  if (state.bossIntroTimer > 0) state.bossIntroTimer -= 1;
+  if (state.bossDefeatedTimer > 0) state.bossDefeatedTimer -= 1;
+
+  // Poison DoT tick every 30 frames
+  if (p.poisonTimer > 0) {
+    p.poisonTimer -= 1;
+    if (p.poisonTimer % 30 === 0) {
+      p.hp = Math.max(1, p.hp - 2);
+      addDamageIndicator(state, p.x + p.w / 2, p.y - 6, '-2 POISON', '#80ed99');
+    }
+  }
 
   // 2. Player Horizontal Movement & Wave Encounter Gate Lock
   if (p.dodgeTimer <= 0) {
-    const moveFactor = p.blocking ? 0.5 : 1.0;
+    const moveFactor = p.rootTimer > 0 ? 0.15 : p.blocking ? 0.5 : 1.0;
     if (state.controls.left) {
       p.vx = -p.speed * moveFactor;
       p.facing = -1;
@@ -614,7 +847,6 @@ export function stepEngineFrame(state: EngineState, viewportWidth = 640): void {
     }
   }
 
-  // Enforce Wave Gate Boundary so players cannot bypass combat encounters!
   const activeWaveDef = lvl.waves[state.currentWave - 1];
   const maxAllowedX =
     !state.allWavesCleared && activeWaveDef
@@ -675,7 +907,10 @@ export function stepEngineFrame(state: EngineState, viewportWidth = 640): void {
       item.collected = true;
       if (item.type === 'coin') state.coinsCollected += 15;
       else if (item.type === 'gem') state.gemsCollected += 1;
-      else {
+      else if (item.type === 'potion') {
+        state.potionsLeft += 1;
+        addDamageIndicator(state, p.x + p.w / 2, p.y - 8, '+1 POTION 🧪', '#c77dff');
+      } else {
         p.hp = Math.min(p.maxHp, p.hp + 30);
         addDamageIndicator(state, p.x + p.w / 2, p.y - 8, '+30 HP', '#52b788');
       }
@@ -687,6 +922,7 @@ export function stepEngineFrame(state: EngineState, viewportWidth = 640): void {
 
   for (let i = state.enemies.length - 1; i >= 0; i--) {
     const e = state.enemies[i];
+    const cfg = MONSTERS_DATA[e.monsterId];
 
     // Boss Phase 2 Enrage at <= 50% HP
     if (e.isBoss && e.bossPhase === 1 && e.hp <= e.maxHp * 0.5 && e.hp > 0) {
@@ -694,25 +930,28 @@ export function stepEngineFrame(state: EngineState, viewportWidth = 640): void {
       e.attack = Math.round(e.attack * 1.2);
       e.moveSpeed = +(e.moveSpeed * 1.18).toFixed(2);
       state.toastText = `⚠️ ${e.name.toUpperCase()} ENTERED PHASE 2!`;
+      addDamageIndicator(state, e.x + e.w / 2, e.y - 18, 'PHASE 2 ENRAGE!', '#ff2a55');
     }
 
-    // Level 6 Witch Story Encounter: Escapes at 35% HP
+    // Level 6 Dark Witch Story Encounter: Escapes at 35% HP
     if (e.isBoss && e.escapeThreshold > 0 && e.hp > 0 && e.hp <= e.maxHp * e.escapeThreshold) {
       state.enemiesDefeated += 1;
       state.coinsCollected += 60;
+      state.bossDefeatedName = `${e.name} (Escaped)`;
+      state.bossDefeatedTimer = 140;
       state.enemies.splice(i, 1);
-      state.dialogueSpeaker = 'THE WITCH';
+      state.dialogueSpeaker = 'THE DARK WITCH';
       state.dialogueText =
         'My curse is too strong for you now! Journey to the Frozen Mountains to awaken the Stone!';
-      state.toastText = 'THE WITCH ESCAPED! ADVANCE TO THE PORTAL!';
+      state.toastText = 'THE DARK WITCH ESCAPED! ADVANCE TO THE PORTAL!';
       continue;
     }
 
     if (e.attackCooldown > 0) e.attackCooldown -= 1;
 
-    // Gravity for jumping slimes / swooping bats returning to altitude
-    if (e.monsterId === 'cave_bat' && e.aiState !== 'ATTACK') {
-      e.y += (132 - e.y) * 0.12;
+    // Altitude return for flying Wyverns / Dragons or gravity for ground monsters
+    if (cfg.isFlying && e.aiState !== 'ATTACK') {
+      e.y += (128 - e.y) * 0.12;
     } else if (e.y + e.h < GROUND_Y) {
       e.vy += 0.48;
       e.y = Math.min(GROUND_Y - e.h, e.y + e.vy);
@@ -775,7 +1014,6 @@ export function stepEngineFrame(state: EngineState, viewportWidth = 640): void {
           e.aiState = 'PREPARE_ATTACK';
           e.stateTimer = e.windupFrames;
           e.hasDealtDamageThisAttack = false;
-          const cfg = MONSTERS_DATA[e.monsterId];
           const abIdx = e.bossPhase === 2 ? 2 : 0;
           e.telegraphAbilityName = cfg.abilities[abIdx]?.name || cfg.abilities[0].name;
         } else if (distToPlayer > e.attackRange * 0.75) {
@@ -830,7 +1068,12 @@ export function stepEngineFrame(state: EngineState, viewportWidth = 640): void {
         e.stateTimer -= 1;
         if (e.stateTimer <= 0) {
           state.enemiesDefeated += 1;
-          state.coinsCollected += e.isBoss ? 75 : 20;
+          state.coinsCollected += e.isBoss ? 85 : 22;
+          if (e.isBoss) {
+            state.bossDefeatedName = e.name;
+            state.bossDefeatedTimer = 160;
+            state.toastText = `👑 BOSS DEFEATED: ${e.name.toUpperCase()}!`;
+          }
           state.enemies.splice(i, 1);
         }
         break;
@@ -848,7 +1091,7 @@ export function stepEngineFrame(state: EngineState, viewportWidth = 640): void {
       Math.abs(p.x + p.w / 2 - proj.x) < p.w * 0.5 + proj.radius &&
       Math.abs(p.y + p.h / 2 - proj.y) < p.h * 0.5 + proj.radius
     ) {
-      applyDamageToPlayer(state, proj.damage, proj.x);
+      applyDamageToPlayer(state, proj.damage, proj.x, proj.effect);
       state.projectiles.splice(i, 1);
       continue;
     }
@@ -883,7 +1126,13 @@ export function stepEngineFrame(state: EngineState, viewportWidth = 640): void {
           )
         );
       }
-      state.toastText = `WAVE ${state.currentWave}/${state.totalWaves} SPAWNED!`;
+      if (state.currentWave === state.totalWaves) {
+        state.bossIntroTimer = 180;
+        const bossCfg = MONSTERS_DATA[lvl.monsterId];
+        state.toastText = `⚠️ FINAL WAVE ${state.currentWave}/${state.totalWaves} — ${bossCfg.name.toUpperCase()} APPEARS!`;
+      } else {
+        state.toastText = `WAVE ${state.currentWave}/${state.totalWaves} SPAWNED!`;
+      }
     } else {
       state.allWavesCleared = true;
       if (!state.toastText.includes('ESCAPED')) {
